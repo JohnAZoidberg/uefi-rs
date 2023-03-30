@@ -398,7 +398,7 @@ impl Mode {
 }
 
 /// Information about a graphics output mode.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 #[repr(C)]
 pub struct ModeInfo {
     // The only known version, associated with the current spec, is 0.
