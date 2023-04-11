@@ -11,14 +11,16 @@ use super::boot::{BootServices, MemoryDescriptor, MemoryMap, MemoryType};
 use super::runtime::{ResetType, RuntimeServices};
 use super::{cfg, Header, Revision};
 
-/// Marker trait used to provide different views of the UEFI System Table
+/// Marker trait used to provide different views of the UEFI System Table.
 pub trait SystemTableView {}
 
-/// Marker struct associated with the boot view of the UEFI System Table
+/// Marker struct associated with the boot view of the UEFI System Table.
+#[derive(Debug)]
 pub struct Boot;
 impl SystemTableView for Boot {}
 
-/// Marker struct associated with the run-time view of the UEFI System Table
+/// Marker struct associated with the run-time view of the UEFI System Table.
+#[derive(Debug)]
 pub struct Runtime;
 impl SystemTableView for Runtime {}
 
@@ -44,9 +46,8 @@ impl SystemTableView for Runtime {}
 /// UEFI boot services in the eye of the Rust borrow checker) and a runtime view
 /// will be provided to replace it.
 #[repr(transparent)]
-#[derive(Debug)]
 pub struct SystemTable<View: SystemTableView> {
-    table: &'static SystemTableImpl,
+    table: *const SystemTableImpl,
     _marker: PhantomData<View>,
 }
 
@@ -55,20 +56,20 @@ impl<View: SystemTableView> SystemTable<View> {
     /// Return the firmware vendor string
     #[must_use]
     pub fn firmware_vendor(&self) -> &CStr16 {
-        unsafe { CStr16::from_ptr(self.table.fw_vendor) }
+        unsafe { CStr16::from_ptr((*self.table).fw_vendor) }
     }
 
     /// Return the firmware revision
     #[must_use]
     pub const fn firmware_revision(&self) -> u32 {
-        self.table.fw_revision
+        unsafe { (*self.table).fw_revision }
     }
 
     /// Returns the revision of this table, which is defined to be
     /// the revision of the UEFI specification implemented by the firmware.
     #[must_use]
     pub const fn uefi_revision(&self) -> Revision {
-        self.table.header.revision
+        unsafe { (*self.table).header.revision }
     }
 
     /// Returns the config table entries, a linear array of structures
@@ -76,7 +77,7 @@ impl<View: SystemTableView> SystemTable<View> {
     #[allow(clippy::missing_const_for_fn)] // Required until we bump the MSRV.
     #[must_use]
     pub fn config_table(&self) -> &[cfg::ConfigTableEntry] {
-        unsafe { slice::from_raw_parts(self.table.cfg_table, self.table.nr_cfg) }
+        unsafe { slice::from_raw_parts((*self.table).cfg_table, (*self.table).nr_cfg) }
     }
 
     /// Creates a new `SystemTable<View>` from a raw address. The address might
@@ -111,12 +112,12 @@ impl<View: SystemTableView> SystemTable<View> {
 impl SystemTable<Boot> {
     /// Returns the standard input protocol.
     pub fn stdin(&mut self) -> &mut text::Input {
-        unsafe { &mut *self.table.stdin }
+        unsafe { &mut *(*self.table).stdin }
     }
 
     /// Returns the standard output protocol.
     pub fn stdout(&mut self) -> &mut text::Output {
-        unsafe { &mut *self.table.stdout.cast() }
+        unsafe { &mut *(*self.table).stdout.cast() }
     }
 
     /// Returns the standard output protocol.
@@ -126,19 +127,19 @@ impl SystemTable<Boot> {
 
     /// Returns the standard error protocol.
     pub fn stderr(&mut self) -> &mut text::Output {
-        unsafe { &mut *self.table.stderr.cast() }
+        unsafe { &mut *(*self.table).stderr.cast() }
     }
 
     /// Access runtime services
     #[must_use]
     pub const fn runtime_services(&self) -> &RuntimeServices {
-        self.table.runtime
+        unsafe { &*(*self.table).runtime }
     }
 
     /// Access boot services
     #[must_use]
     pub const fn boot_services(&self) -> &BootServices {
-        unsafe { &*self.table.boot }
+        unsafe { &*(*self.table).boot }
     }
 
     /// Get the size in bytes of the buffer to allocate for storing the memory
@@ -199,7 +200,7 @@ impl SystemTable<Boot> {
     /// Once boot services are exited, the logger and allocator provided by
     /// this crate can no longer be used. The logger should be disabled using
     /// the [`Logger::disable`] method, and the allocator should be disabled by
-    /// calling [`global_allocator::exit_boot_services`]. Note that if the logger and
+    /// calling [`allocator::exit_boot_services`]. Note that if the logger and
     /// allocator were initialized with [`uefi_services::init`], they will be
     /// disabled automatically when `exit_boot_services` is called.
     ///
@@ -213,7 +214,7 @@ impl SystemTable<Boot> {
     /// now in an undefined state. Rather than returning control to the
     /// caller, the system will be reset.
     ///
-    /// [`global_allocator::exit_boot_services`]: crate::global_allocator::exit_boot_services
+    /// [`allocator::exit_boot_services`]: crate::allocator::exit_boot_services
     /// [`Logger::disable`]: crate::logger::Logger::disable
     /// [`uefi_services::init`]: https://docs.rs/uefi-services/latest/uefi_services/fn.init.html
     #[must_use]
@@ -279,7 +280,7 @@ impl SystemTable<Boot> {
 
 impl Debug for SystemTable<Boot> {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        self.table.fmt(f)
+        unsafe { &*self.table }.fmt(f)
     }
 }
 
@@ -296,7 +297,7 @@ impl SystemTable<Runtime> {
     /// "Calling Conventions" chapter of the UEFI specification for details.
     #[must_use]
     pub const unsafe fn runtime_services(&self) -> &RuntimeServices {
-        self.table.runtime
+        &*(*self.table).runtime
     }
 
     /// Changes the runtime addressing mode of EFI firmware from physical to virtual.
@@ -322,22 +323,27 @@ impl SystemTable<Runtime> {
         let entry_size = core::mem::size_of::<MemoryDescriptor>();
         let entry_version = crate::table::boot::MEMORY_DESCRIPTOR_VERSION;
         let map_ptr = map.as_mut_ptr();
-        (self.table.runtime.set_virtual_address_map)(map_size, entry_size, entry_version, map_ptr)
-            .into_with_val(|| {
-                let new_table_ref =
-                    &mut *(new_system_table_virtual_addr as usize as *mut SystemTableImpl);
-                Self {
-                    table: new_table_ref,
-                    _marker: PhantomData,
-                }
-            })
+        ((*(*self.table).runtime).set_virtual_address_map)(
+            map_size,
+            entry_size,
+            entry_version,
+            map_ptr,
+        )
+        .into_with_val(|| {
+            let new_table_ref =
+                &mut *(new_system_table_virtual_addr as usize as *mut SystemTableImpl);
+            Self {
+                table: new_table_ref,
+                _marker: PhantomData,
+            }
+        })
     }
 
     /// Return the address of the SystemTable that resides in a UEFI runtime services
     /// memory region.
     #[must_use]
     pub fn get_current_system_table_addr(&self) -> u64 {
-        self.table as *const _ as usize as u64
+        self.table as u64
     }
 }
 
@@ -355,7 +361,7 @@ struct SystemTableImpl {
     stderr_handle: Handle,
     stderr: *mut text::Output,
     /// Runtime services table.
-    runtime: &'static RuntimeServices,
+    runtime: *const RuntimeServices,
     /// Boot services table.
     boot: *const BootServices,
     /// Number of entries in the configuration table.

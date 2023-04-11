@@ -15,7 +15,7 @@ use crate::proto::unsafe_protocol;
 use crate::util::{ptr_write_unaligned_and_add, usize_from_u32};
 use crate::{Error, Result, Status};
 use core::fmt::{self, Debug, Formatter};
-use core::marker::{PhantomData, PhantomPinned};
+use core::marker::PhantomData;
 use core::mem::{self, MaybeUninit};
 use core::ptr;
 use ptr_meta::Pointee;
@@ -224,15 +224,11 @@ impl PartialEq for PcrEvent {
     }
 }
 
-/// Opaque type that should be used to represent a pointer to a [`PcrEvent`] in
-/// foreign function interfaces. This type produces a thin pointer, unlike
-/// [`PcrEvent`].
-#[repr(C, packed)]
-pub struct FfiPcrEvent {
-    // This representation is recommended by the nomicon:
-    // https://doc.rust-lang.org/stable/nomicon/ffi.html#representing-opaque-structs
-    _data: [u8; 0],
-    _marker: PhantomData<(*mut u8, PhantomPinned)>,
+opaque_type! {
+    /// Opaque type that should be used to represent a pointer to a [`PcrEvent`] in
+    /// foreign function interfaces. This type produces a thin pointer, unlike
+    /// [`PcrEvent`].
+    pub struct FfiPcrEvent;
 }
 
 /// TPM event log.
@@ -244,6 +240,7 @@ pub struct FfiPcrEvent {
 /// [`v1::Tcg`]: Tcg
 /// [`v2::Tcg`]: super::v2::Tcg
 /// [`get_event_log_v2`]: super::v2::Tcg::get_event_log_v2
+#[derive(Debug)]
 pub struct EventLog<'a> {
     // Tie the lifetime to the protocol, and by extension, boot services.
     _lifetime: PhantomData<&'a Tcg>,
@@ -292,6 +289,7 @@ impl<'a> EventLog<'a> {
 }
 
 /// Iterator for events in [`EventLog`].
+#[derive(Debug)]
 pub struct EventLogIter<'a> {
     log: &'a EventLog<'a>,
     location: *const u8,
@@ -381,6 +379,7 @@ pub struct Tcg {
 }
 
 /// Return type of [`Tcg::status_check`].
+#[derive(Debug)]
 pub struct StatusCheck<'a> {
     /// Information about the protocol and the TPM device.
     pub protocol_capability: BootServiceCapability,

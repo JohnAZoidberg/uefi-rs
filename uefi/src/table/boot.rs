@@ -3,12 +3,8 @@
 use super::{Header, Revision};
 use crate::data_types::{Align, PhysicalAddress, VirtualAddress};
 use crate::proto::device_path::{DevicePath, FfiDevicePath};
-#[cfg(feature = "alloc")]
-use crate::proto::{loaded_image::LoadedImage, media::fs::SimpleFileSystem};
 use crate::proto::{Protocol, ProtocolPointer};
 use crate::{Char16, Event, Guid, Handle, Result, Status};
-#[cfg(feature = "alloc")]
-use ::alloc::vec::Vec;
 use bitflags::bitflags;
 use core::cell::UnsafeCell;
 use core::ffi::c_void;
@@ -17,6 +13,12 @@ use core::mem::{self, MaybeUninit};
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 use core::{ptr, slice};
+#[cfg(feature = "alloc")]
+use {
+    crate::fs::FileSystem,
+    crate::proto::{loaded_image::LoadedImage, media::fs::SimpleFileSystem},
+    ::alloc::vec::Vec,
+};
 
 // TODO: this similar to `SyncUnsafeCell`. Once that is stabilized we
 // can use it instead.
@@ -1478,36 +1480,32 @@ impl BootServices {
         Ok(handles)
     }
 
-    /// Retrieves the `SimpleFileSystem` protocol associated with
-    /// the device the given image was loaded from.
-    ///
-    /// You can retrieve the SFS protocol associated with the boot partition
-    /// by passing the image handle received by the UEFI entry point to this function.
+    /// Retrieves a [`FileSystem`] protocol associated with the device the given
+    /// image was loaded from.
     ///
     /// # Errors
     ///
-    /// This function can return errors from [`open_protocol_exclusive`] and [`locate_device_path`].
-    /// See those functions for more details.
+    /// This function can return errors from [`open_protocol_exclusive`] and
+    /// [`locate_device_path`]. See those functions for more details.
     ///
     /// [`open_protocol_exclusive`]: Self::open_protocol_exclusive
     /// [`locate_device_path`]: Self::locate_device_path
+    /// [`FileSystem`]: uefi::fs::FileSystem
     ///
     /// * [`uefi::Status::INVALID_PARAMETER`]
     /// * [`uefi::Status::UNSUPPORTED`]
     /// * [`uefi::Status::ACCESS_DENIED`]
     /// * [`uefi::Status::ALREADY_STARTED`]
     /// * [`uefi::Status::NOT_FOUND`]
-    pub fn get_image_file_system(
-        &self,
-        image_handle: Handle,
-    ) -> Result<ScopedProtocol<SimpleFileSystem>> {
+    pub fn get_image_file_system(&self, image_handle: Handle) -> Result<FileSystem> {
         let loaded_image = self.open_protocol_exclusive::<LoadedImage>(image_handle)?;
 
         let device_path = self.open_protocol_exclusive::<DevicePath>(loaded_image.device())?;
 
         let device_handle = self.locate_device_path::<SimpleFileSystem>(&mut &*device_path)?;
 
-        self.open_protocol_exclusive(device_handle)
+        let protocol = self.open_protocol_exclusive(device_handle)?;
+        Ok(FileSystem::new(protocol))
     }
 }
 
@@ -1644,6 +1642,7 @@ impl Debug for BootServices {
 
 /// Used as a parameter of [`BootServices::load_image`] to provide the
 /// image source.
+#[derive(Debug)]
 pub enum LoadImageSource<'a> {
     /// Load an image from a buffer. The data will copied from the
     /// buffer, so the input reference doesn't need to remain valid
@@ -1701,6 +1700,7 @@ pub enum Tpl: usize => {
 /// RAII guard for task priority level changes
 ///
 /// Will automatically restore the former task priority level when dropped.
+#[derive(Debug)]
 pub struct TplGuard<'boot> {
     boot_services: &'boot BootServices,
     old_tpl: Tpl,
@@ -1731,6 +1731,7 @@ impl Drop for TplGuard<'_> {
 
 /// Attributes for [`BootServices::open_protocol`].
 #[repr(u32)]
+#[derive(Debug)]
 pub enum OpenProtocolAttributes {
     /// Used by drivers to get a protocol interface for a handle. The
     /// driver will not be informed if the interface is uninstalled or
@@ -1763,6 +1764,7 @@ pub enum OpenProtocolAttributes {
 }
 
 /// Parameters passed to [`BootServices::open_protocol`].
+#[derive(Debug)]
 pub struct OpenProtocolParams {
     /// The handle for the protocol to open.
     pub handle: Handle,
@@ -1783,6 +1785,7 @@ pub struct OpenProtocolParams {
 ///
 /// See also the [`BootServices`] documentation for details of how to open a
 /// protocol and why [`UnsafeCell`] is used.
+#[derive(Debug)]
 pub struct ScopedProtocol<'a, P: Protocol + ?Sized> {
     /// The protocol interface.
     interface: &'a UnsafeCell<P>,
@@ -1928,6 +1931,7 @@ impl Align for MemoryDescriptor {
 
 bitflags! {
     /// Flags describing the capabilities of a memory range.
+    #[repr(transparent)]
     pub struct MemoryAttribute: u64 {
         /// Supports marking as uncacheable.
         const UNCACHEABLE = 0x1;
@@ -1982,7 +1986,9 @@ bitflags! {
 #[repr(C)]
 pub struct MemoryMapKey(usize);
 
-/// A structure containing the size of a memory descriptor and the size of the memory map
+/// A structure containing the size of a memory descriptor and the size of the
+/// memory map.
+#[derive(Debug)]
 pub struct MemoryMapSize {
     /// Size of a single memory descriptor in bytes
     pub entry_size: usize,
@@ -1995,6 +2001,7 @@ pub struct MemoryMapSize {
 ///
 /// To iterate over the entries, call [`MemoryMap::entries`]. To get a sorted
 /// map, you manually have to call [`MemoryMap::sort`] first.
+#[derive(Debug)]
 pub struct MemoryMap<'buf> {
     key: MemoryMapKey,
     buf: &'buf mut [u8],
@@ -2161,6 +2168,7 @@ impl<'guid> SearchType<'guid> {
 
 bitflags! {
     /// Flags describing the type of an UEFI event and its attributes.
+    #[repr(transparent)]
     pub struct EventType: u32 {
         /// The event is a timer event and may be passed to `BootServices::set_timer()`
         /// Note that timers only function during boot services time.
@@ -2195,7 +2203,8 @@ bitflags! {
 /// Raw event notification function
 type EventNotifyFn = unsafe extern "efiapi" fn(event: Event, context: Option<NonNull<c_void>>);
 
-/// Timer events manipulation
+/// Timer events manipulation.
+#[derive(Debug)]
 pub enum TimerTrigger {
     /// Cancel event's timer
     Cancel,
@@ -2211,6 +2220,7 @@ pub enum TimerTrigger {
 
 /// Protocol interface [`Guids`][Guid] that are installed on a [`Handle`] as
 /// returned by [`BootServices::protocols_per_handle`].
+#[derive(Debug)]
 pub struct ProtocolsPerHandle<'a> {
     // The pointer returned by `protocols_per_handle` has to be free'd with
     // `free_pool`, so keep a reference to boot services for that purpose.
@@ -2248,10 +2258,11 @@ impl<'a> ProtocolsPerHandle<'a> {
     }
 }
 
-/// A buffer that contains an array of [`Handles`][Handle] that support the requested protocol.
-/// Returned by [`BootServices::locate_handle_buffer`].
+/// A buffer that contains an array of [`Handles`][Handle] that support the
+/// requested protocol. Returned by [`BootServices::locate_handle_buffer`].
+#[derive(Debug)]
 pub struct HandleBuffer<'a> {
-    // The pointer returned by `locate_handle_buffer` has to be free'd with
+    // The pointer returned by `locate_handle_buffer` has to be freed with
     // `free_pool`, so keep a reference to boot services for that purpose.
     boot_services: &'a BootServices,
     count: usize,

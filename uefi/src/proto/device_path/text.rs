@@ -8,12 +8,10 @@
 // if there is insufficient memory. So we treat any NULL output as an
 // `OUT_OF_RESOURCES` error.
 
-use crate::{
-    proto::device_path::{DevicePath, DevicePathNode, FfiDevicePath},
-    proto::unsafe_protocol,
-    table::boot::BootServices,
-    CStr16, Char16, Result, Status,
-};
+use crate::proto::device_path::{DevicePath, DevicePathNode, FfiDevicePath};
+use crate::proto::unsafe_protocol;
+use crate::table::boot::BootServices;
+use crate::{CStr16, Char16, Result, Status};
 use core::ops::Deref;
 
 /// This struct is a wrapper of `display_only` parameter
@@ -25,7 +23,7 @@ use core::ops::Deref;
 /// representation of the display node is used, where applicable.
 /// If `display_only` is FALSE, then the longer text representation
 /// of the display node is used.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct DisplayOnly(pub bool);
 
 /// This struct is a wrapper of `allow_shortcuts` parameter
@@ -37,11 +35,12 @@ pub struct DisplayOnly(pub bool);
 /// type or subtype. If `allow_shortcuts is TRUE, then the
 /// shortcut forms of text representation for a device node
 /// can be used, where applicable.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct AllowShortcuts(pub bool);
 
 /// Wrapper for a string internally allocated from
 /// UEFI boot services memory.
+#[derive(Debug)]
 pub struct PoolString<'a> {
     boot_services: &'a BootServices,
     text: *const Char16,

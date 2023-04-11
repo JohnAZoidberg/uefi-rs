@@ -271,6 +271,7 @@ impl SimpleNetwork {
 
 bitflags! {
     /// Flags to pass to receive_filters to enable/disable reception of some kinds of packets.
+    #[repr(transparent)]
     pub struct ReceiveFlags : u32 {
         /// Receive unicast packets.
         const UNICAST = 0x01;
@@ -288,6 +289,7 @@ bitflags! {
 bitflags! {
     /// Flags returned by get_interrupt_status to indicate which interrupts have fired on the
     /// interface since the last call.
+    #[repr(transparent)]
     pub struct InterruptStatus : u32 {
         /// Packet received.
         const RECEIVE = 0x01;
@@ -532,6 +534,7 @@ impl NetworkStats {
 
 /// The Simple Network Mode
 #[repr(C)]
+#[derive(Debug)]
 pub struct NetworkMode {
     /// Reports the current state of the network interface
     pub state: NetworkState,
@@ -574,7 +577,7 @@ pub struct NetworkMode {
 }
 
 newtype_enum! {
-    /// The state of a network interface
+    /// The state of a network interface.
     pub enum NetworkState: u32 => {
         /// The interface has been stopped
         STOPPED = 0,

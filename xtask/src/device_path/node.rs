@@ -2,8 +2,7 @@ use super::field::NodeField;
 use super::group::DeviceType;
 use crate::device_path::util::is_doc_attr;
 use heck::ToShoutySnakeCase;
-use proc_macro2::Span;
-use proc_macro2::TokenStream;
+use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::{Attribute, Fields, Ident, ItemStruct, LitInt, LitStr};
 
@@ -128,6 +127,8 @@ impl Node {
             quote!()
         };
 
+        // For packed structs, we do not need the #[derive(Debug)] as we
+        // generate an implementation.
         quote!(
             #(#struct_docs)*
             #[repr(C, packed)]
@@ -291,6 +292,7 @@ impl Node {
         if self.fields.is_empty() {
             return quote!(
                 #(#struct_docs)*
+                #[derive(Debug)]
                 pub struct #struct_ident;
             );
         }
@@ -315,6 +317,7 @@ impl Node {
         let struct_lifetime = self.builder_lifetime();
         quote!(
             #(#struct_docs)*
+            #[derive(Debug)]
             pub struct #struct_ident #struct_lifetime {
                 #(#fields),*
             }

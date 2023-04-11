@@ -1,15 +1,14 @@
 //! PXE Base Code protocol.
 
-use core::{
-    ffi::c_void,
-    iter::from_fn,
-    marker::{PhantomData, PhantomPinned},
-    mem::MaybeUninit,
-    ptr::{null, null_mut},
-};
+use core::ffi::c_void;
+use core::fmt::{Debug, Formatter};
+use core::iter::from_fn;
+use core::mem::MaybeUninit;
+use core::ptr::{null, null_mut};
 
+use crate::polyfill::maybe_uninit_slice_as_mut_ptr;
+use crate::proto::unsafe_protocol;
 use crate::util::ptr_write_unaligned_and_add;
-use crate::{polyfill::maybe_uninit_slice_as_mut_ptr, proto::unsafe_protocol};
 use bitflags::bitflags;
 use ptr_meta::Pointee;
 
@@ -623,7 +622,7 @@ impl BaseCode {
 /// A type of bootstrap to perform in [`BaseCode::discover`].
 ///
 /// Corresponds to the `EFI_PXE_BASE_CODE_BOOT_` constants in the C API.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(u16)]
 #[allow(missing_docs)]
 pub enum BootstrapType {
@@ -652,22 +651,18 @@ pub enum BootstrapType {
     PxeTest = 65535,
 }
 
-/// Opaque type that should be used to represent a pointer to a [`DiscoverInfo`] in
-/// foreign function interfaces. This type produces a thin pointer, unlike
-/// [`DiscoverInfo`].
-#[repr(C, packed)]
-pub struct FfiDiscoverInfo {
-    // This representation is recommended by the nomicon:
-    // https://doc.rust-lang.org/stable/nomicon/ffi.html#representing-opaque-structs
-    _data: [u8; 0],
-    _marker: PhantomData<(*mut u8, PhantomPinned)>,
+opaque_type! {
+    /// Opaque type that should be used to represent a pointer to a [`DiscoverInfo`] in
+    /// foreign function interfaces. This type produces a thin pointer, unlike
+    /// [`DiscoverInfo`].
+    pub struct FfiDiscoverInfo;
 }
 
 /// This struct contains optional parameters for [`BaseCode::discover`].
 ///
 /// Corresponds to the `EFI_PXE_BASE_CODE_DISCOVER_INFO` type in the C API.
 #[repr(C)]
-#[derive(Pointee)]
+#[derive(Debug, Pointee)]
 pub struct DiscoverInfo {
     use_m_cast: bool,
     use_b_cast: bool,
@@ -770,6 +765,7 @@ impl DiscoverInfo {
 ///
 /// Corresponds to the `EFI_PXE_BASE_CODE_SRVLIST` type in the C API.
 #[repr(C)]
+#[derive(Debug)]
 pub struct Server {
     /// The type of Boot Server reply
     pub ty: u16,
@@ -820,7 +816,7 @@ enum TftpOpcode {
 /// MTFTP connection parameters
 ///
 /// Corresponds to the `EFI_PXE_BASE_CODE_MTFTP_INFO` type in the C API.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct MtftpInfo {
     /// File multicast IP address. This is the IP address to which the server
@@ -866,6 +862,7 @@ bitflags! {
 ///
 /// Corresponds to the `EFI_PXE_BASE_CODE_IP_FILTER` type in the C API.
 #[repr(C)]
+#[derive(Debug)]
 pub struct IpFilter {
     /// A set of filters.
     pub filters: IpFilters,
@@ -929,6 +926,12 @@ pub union Packet {
     dhcpv6: DhcpV6Packet,
 }
 
+impl Debug for Packet {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        write!(f, "<binary data>")
+    }
+}
+
 impl AsRef<[u8; 1472]> for Packet {
     fn as_ref(&self) -> &[u8; 1472] {
         unsafe { &self.raw }
@@ -951,7 +954,7 @@ impl AsRef<DhcpV6Packet> for Packet {
 ///
 /// Corresponds to the `EFI_PXE_BASE_CODE_DHCPV4_PACKET` type in the C API.
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct DhcpV4Packet {
     /// Packet op code / message type.
     pub bootp_opcode: u8,
@@ -1015,6 +1018,7 @@ impl DhcpV4Packet {
 
 bitflags! {
     /// Represents the 'flags' field for a [`DhcpV4Packet`].
+    #[repr(transparent)]
     pub struct DhcpV4Flags: u16 {
         /// Should be set when the client cannot receive unicast IP datagrams
         /// until its protocol software has been configured with an IP address.
@@ -1026,7 +1030,7 @@ bitflags! {
 ///
 /// Corresponds to the `EFI_PXE_BASE_CODE_DHCPV6_PACKET` type in the C API.
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct DhcpV6Packet {
     /// The message type.
     pub message_type: u8,
@@ -1050,6 +1054,7 @@ impl DhcpV6Packet {
 ///
 /// Corresponds to the `EFI_PXE_BASE_CODE_MODE` type in the C API.
 #[repr(C)]
+#[derive(Debug)]
 pub struct Mode {
     /// `true` if this device has been started by calling [`BaseCode::start`].
     /// This field is set to `true` by [`BaseCode::start`] and to `false` by
@@ -1208,6 +1213,7 @@ pub struct Mode {
 ///
 /// Corresponds to the `EFI_PXE_BASE_CODE_ARP_ENTRY` type in the C API.
 #[repr(C)]
+#[derive(Debug)]
 pub struct ArpEntry {
     /// The IP address.
     pub ip_addr: IpAddress,
@@ -1220,6 +1226,7 @@ pub struct ArpEntry {
 /// Corresponds to the `EFI_PXE_BASE_CODE_ROUTE_ENTRY` type in the C API.
 #[repr(C)]
 #[allow(missing_docs)]
+#[derive(Debug)]
 pub struct RouteEntry {
     pub ip_addr: IpAddress,
     pub subnet_mask: IpAddress,
@@ -1231,6 +1238,7 @@ pub struct RouteEntry {
 /// Corresponds to the `EFI_PXE_BASE_CODE_ICMP_ERROR` type in the C API.
 #[repr(C)]
 #[allow(missing_docs)]
+#[derive(Debug)]
 pub struct IcmpError {
     pub ty: u8,
     pub code: u8,
@@ -1250,10 +1258,16 @@ pub union IcmpErrorUnion {
     pub echo: IcmpErrorEcho,
 }
 
+impl Debug for IcmpErrorUnion {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        write!(f, "<binary data>")
+    }
+}
+
 /// Corresponds to the `Echo` field in the anonymous union inside
 /// `EFI_PXE_BASE_CODE_ICMP_ERROR` in the C API.
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 #[allow(missing_docs)]
 pub struct IcmpErrorEcho {
     pub identifier: u16,
@@ -1265,6 +1279,7 @@ pub struct IcmpErrorEcho {
 /// Corresponds to the `EFI_PXE_BASE_CODE_TFTP_ERROR` type in the C API.
 #[repr(C)]
 #[allow(missing_docs)]
+#[derive(Debug)]
 pub struct TftpError {
     pub error_code: u8,
     pub error_string: [u8; 127],
@@ -1272,6 +1287,7 @@ pub struct TftpError {
 
 /// Returned by [`BaseCode::tftp_read_dir`].
 #[allow(missing_docs)]
+#[derive(Debug)]
 pub struct TftpFileInfo<'a> {
     pub filename: &'a CStr8,
     pub size: u64,
@@ -1285,6 +1301,7 @@ pub struct TftpFileInfo<'a> {
 
 /// Returned by [`BaseCode::mtftp_read_dir`].
 #[allow(missing_docs)]
+#[derive(Debug)]
 pub struct MtftpFileInfo<'a> {
     pub filename: &'a CStr8,
     pub ip_address: IpAddress,

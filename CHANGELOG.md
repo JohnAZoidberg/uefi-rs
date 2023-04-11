@@ -2,6 +2,35 @@
 
 ## uefi - [Unreleased]
 
+### Added
+
+- There is a new `fs` module that provides a high-level API for file-system
+  access. The API is close to the `std::fs` module.
+- Multiple convenience methods for `CString16` and `CStr16`, including:
+  - `CStr16::as_slice()`
+  - `CStr16::num_chars()`
+  - `CStr16::is_empty()`
+  - `CString16::new()`
+  - `CString16::is_empty()`
+  - `CString16::num_chars()`
+  - `CString16::replace_char()`
+  - `CString16::push()`
+  - `CString16::push_str()`
+  - `From<&CStr16>` for `CString16`
+  - `From<&CStr16>` for `String`
+  - `From<&CString16>` for `String`
+
+### Changed
+
+- The `global_allocator` module has been renamed to `allocator`, and is now
+  available regardless of whether the `global_allocator` feature is enabled. The
+  `global_allocator` feature now only controls whether `allocator::Allocator` is
+  set as Rust's global allocator.
+- `Error::new` and `Error::from` now panic if the status is `SUCCESS`.
+- `Image::get_image_file_system` now returns a `fs::FileSystem` instead of the
+  protocol.
+- `CString16::default` now always contains a null character.
+
 ## uefi-macros - [Unreleased]
 
 ## uefi-services - [Unreleased]
@@ -19,6 +48,9 @@ Rust 1.68 or higher.
 - `FileType`, `FileHandle`, `RegularFile`, and `Directory` now implement `Debug`.
 - Added `RuntimeServices::delete_variable()` helper method.
 - Implement `Borrow` for `CString16` and `ToOwned` for `CStr16`.
+- Every public struct now implements `Debug`. Exceptions are cases when there
+  is no sensible way of presenting a useful Debug representation, such as for
+  Unions.
 
 ### Changed
 

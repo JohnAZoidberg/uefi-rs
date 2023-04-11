@@ -43,8 +43,8 @@
 //!   `Vec` rather than filling a statically-sized array. This requires
 //!   a global allocator; you can use the `global_allocator` feature or
 //!   provide your own.
-//! - `global_allocator`: Implement a [global allocator] using UEFI
-//!   functions. This is a simple allocator that relies on the UEFI pool
+//! - `global_allocator`: Set [`allocator::Allocator`] as the global Rust
+//!   allocator. This is a simple allocator that relies on the UEFI pool
 //!   allocator. You can choose to provide your own allocator instead of
 //!   using this feature, or no allocator at all if you don't need to
 //!   dynamically allocate any memory.
@@ -83,6 +83,7 @@
 #![warn(clippy::ptr_as_ptr, missing_docs, unused)]
 #![deny(clippy::all)]
 #![deny(clippy::must_use_candidate)]
+#![deny(missing_debug_implementations)]
 
 #[cfg(feature = "alloc")]
 extern crate alloc;
@@ -95,8 +96,7 @@ extern crate self as uefi;
 pub mod data_types;
 #[cfg(feature = "alloc")]
 pub use self::data_types::CString16;
-pub use self::data_types::Identify;
-pub use self::data_types::{CStr16, CStr8, Char16, Char8, Event, Guid, Handle};
+pub use self::data_types::{CStr16, CStr8, Char16, Char8, Event, Guid, Handle, Identify};
 pub use uefi_macros::{cstr16, cstr8, entry, guid};
 
 mod result;
@@ -108,11 +108,13 @@ pub mod proto;
 
 pub mod prelude;
 
-#[cfg(feature = "global_allocator")]
-pub mod global_allocator;
+pub mod allocator;
 
 #[cfg(feature = "logger")]
 pub mod logger;
+
+#[cfg(feature = "alloc")]
+pub mod fs;
 
 // As long as this is behind "alloc", we can simplify cfg-feature attributes in this module.
 #[cfg(feature = "alloc")]

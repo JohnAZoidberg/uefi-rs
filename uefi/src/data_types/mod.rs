@@ -2,7 +2,8 @@
 //!
 //! This module defines the basic data types that are used throughout uefi-rs
 
-use core::{ffi::c_void, ptr::NonNull};
+use core::ffi::c_void;
+use core::ptr::NonNull;
 
 /// Opaque handle to an UEFI entity (protocol, image...), guaranteed to be non-null.
 ///
@@ -41,6 +42,7 @@ impl Handle {
 ///
 /// If you need to have a nullable event, use `Option<Event>`.
 #[repr(transparent)]
+#[derive(Debug)]
 pub struct Event(NonNull<c_void>);
 
 impl Event {
@@ -120,14 +122,16 @@ pub type PhysicalAddress = u64;
 pub type VirtualAddress = u64;
 
 mod guid;
-pub use self::guid::Guid;
-pub use self::guid::Identify;
+pub use self::guid::{Guid, Identify};
 
 pub mod chars;
 pub use self::chars::{Char16, Char8};
 
 #[macro_use]
 mod enums;
+
+#[macro_use]
+mod opaque;
 
 mod strs;
 pub use self::strs::{
