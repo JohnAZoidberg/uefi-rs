@@ -1,6 +1,7 @@
 use alloc::string::ToString;
 use core::cell::RefCell;
 use core::ptr::NonNull;
+use uefi::data_types::Align;
 use uefi::prelude::*;
 use uefi::proto::media::block::BlockIO;
 use uefi::proto::media::disk::{DiskIo, DiskIo2, DiskIo2Token};
@@ -29,8 +30,12 @@ fn test_existing_dir(directory: &mut Directory) {
 
     let dir = RefCell::new(dir);
 
+    assert_eq!(FileInfo::alignment(), 8);
+    #[repr(align(8))]
+    struct Buf([u8; 200]);
+
     // Backing memory to read the file info data into.
-    let mut stack_buf = [0; 200];
+    let mut stack_buf = Buf([0; 200]);
 
     // The file names that the test read from the directory.
     let entry_names = RefCell::new(vec![]);
@@ -44,7 +49,7 @@ fn test_existing_dir(directory: &mut Directory) {
         let mut entry_names = entry_names.borrow_mut();
         loop {
             let entry = dir
-                .read_entry(&mut stack_buf)
+                .read_entry(&mut stack_buf.0)
                 .expect("failed to read directory");
             if let Some(entry) = entry {
                 entry_names.push(entry.file_name().to_string());
@@ -122,7 +127,7 @@ fn test_existing_file(directory: &mut Directory) {
     let mut info_buffer = vec![0; 128];
     let info = file.get_info::<FileInfo>(&mut info_buffer).unwrap();
     assert_eq!(info.file_size(), 15);
-    assert_eq!(info.physical_size(), 512);
+    assert_eq!(info.physical_size(), 1024);
     let tp = TimeParams {
         year: 2000,
         month: 1,
@@ -350,7 +355,7 @@ fn test_partition_info(bt: &BootServices, disk_handle: Handle) {
 
     assert_eq!(mbr.boot_indicator, 0);
     assert_eq!({ mbr.starting_lba }, 1);
-    assert_eq!({ mbr.size_in_lba }, 1233);
+    assert_eq!({ mbr.size_in_lba }, 20479);
     assert_eq!({ mbr.starting_chs }, [0, 0, 0]);
     assert_eq!(mbr.ending_chs, [0, 0, 0]);
     assert_eq!(mbr.os_type, MbrOsType(6));
@@ -407,9 +412,9 @@ pub fn test(bt: &BootServices) {
             .unwrap();
 
         assert!(!fs_info.read_only());
-        assert_eq!(fs_info.volume_size(), 512 * 1192);
-        assert_eq!(fs_info.free_space(), 512 * 1190);
-        assert_eq!(fs_info.block_size(), 512);
+        assert_eq!(fs_info.volume_size(), 1024 * 10183);
+        assert_eq!(fs_info.free_space(), 1024 * 10181);
+        assert_eq!(fs_info.block_size(), 1024);
         assert_eq!(fs_info.volume_label().to_string(), "MbrTestDisk");
 
         // Check that `get_boxed_info` returns the same info.

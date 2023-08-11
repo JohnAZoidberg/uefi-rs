@@ -49,7 +49,7 @@ fn efi_main(image: Handle, mut st: SystemTable<Boot>) -> Status {
     bt.get_image_file_system(image)
         .expect("Failed to retrieve boot file system");
 
-    boot::test(bt);
+    boot::test(&st);
 
     // Test all the supported protocols.
     proto::test(image, &mut st);
@@ -181,7 +181,7 @@ fn shutdown(mut st: SystemTable<Boot>) -> ! {
         // Shut down the system
         let rt = unsafe { st.runtime_services() };
         rt.reset(
-            uefi::table::runtime::ResetType::Shutdown,
+            uefi::table::runtime::ResetType::SHUTDOWN,
             Status::SUCCESS,
             None,
         );

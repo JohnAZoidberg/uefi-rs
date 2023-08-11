@@ -1,5 +1,6 @@
 mod arch;
 mod cargo;
+mod check_raw;
 mod device_path;
 mod disk;
 mod net;
@@ -10,13 +11,14 @@ mod qemu;
 mod tpm;
 mod util;
 
-use crate::opt::TestOpt;
+use crate::opt::{FmtOpt, TestOpt};
 use anyhow::Result;
 use arch::UefiArch;
 use cargo::{Cargo, CargoAction, Feature, Package, TargetTypes};
 use clap::Parser;
 use itertools::Itertools;
 use opt::{Action, BuildOpt, ClippyOpt, DocOpt, Opt, QemuOpt, TpmVersion};
+use std::process::Command;
 use util::run_cmd;
 
 fn build_feature_permutations(opt: &BuildOpt) -> Result<()> {
@@ -119,6 +121,12 @@ fn run_miri() -> Result<()> {
 fn run_vm_tests(opt: &QemuOpt) -> Result<()> {
     let mut features = vec![];
 
+    // Enable the DebugSupport test on supported platforms. Not available on
+    // AARCH64 since edk2 commit f4213fed34.
+    if *opt.target != UefiArch::AArch64 {
+        features.push(Feature::DebugSupport);
+    }
+
     // Enable the PXE test unless networking is disabled or the arch doesn't
     // support it.
     if *opt.target == UefiArch::X86_64 && !opt.disable_network {
@@ -132,9 +140,9 @@ fn run_vm_tests(opt: &QemuOpt) -> Result<()> {
         None => {}
     }
 
-    // Enable the multi-processor test if KVM is available. KVM is
-    // available on Linux generally, but not in our CI.
-    if platform::is_linux() && !opt.ci {
+    // Enable the multi-processor test if not targeting AARCH64, and if KVM is
+    // available. KVM is available on Linux generally, but not in our CI.
+    if *opt.target != UefiArch::AArch64 && platform::is_linux() && !opt.ci {
         features.push(Feature::MultiProcessor);
     }
 
@@ -174,7 +182,7 @@ fn run_host_tests(test_opt: &TestOpt) -> Result<()> {
     };
     run_cmd(cargo.command()?)?;
 
-    let mut packages = vec![Package::Uefi];
+    let mut packages = vec![Package::UefiRaw, Package::Uefi];
     if !test_opt.skip_macro_tests {
         packages.push(Package::UefiMacros);
     }
@@ -199,16 +207,112 @@ fn run_host_tests(test_opt: &TestOpt) -> Result<()> {
     run_cmd(cargo.command()?)
 }
 
+/// Formats the project: nix, rust, and yml.
+fn run_fmt_project(fmt_opt: &FmtOpt) -> Result<()> {
+    // fmt rust
+    {
+        eprintln!("Formatting: rust");
+        let mut command = Command::new("cargo");
+        command.arg("fmt");
+        if fmt_opt.check {
+            command.arg("--check");
+        }
+        command
+            .arg("--all")
+            .arg("--")
+            .arg("--config")
+            .arg("imports_granularity=Module");
+
+        match run_cmd(command) {
+            Ok(_) => {
+                eprintln!("✅ rust files formatted")
+            }
+            Err(e) => {
+                if fmt_opt.check {
+                    eprintln!("❌ rust files do not pass check");
+                } else {
+                    eprintln!("❌ rust formatter failed: {e:#?}");
+                }
+            }
+        }
+    }
+
+    // fmt yml
+    if has_cmd("yamlfmt") {
+        eprintln!("Formatting: yml");
+        let mut command = Command::new("yamlfmt");
+        if fmt_opt.check {
+            command.arg("-lint");
+        }
+        // We only have yml files here.
+        command.arg(".github");
+
+        match run_cmd(command) {
+            Ok(_) => {
+                eprintln!("✅ yml files formatted")
+            }
+            Err(e) => {
+                if fmt_opt.check {
+                    eprintln!("❌ yml files do not pass check");
+                } else {
+                    eprintln!("❌ yml formatter failed: {e:#?}");
+                }
+            }
+        }
+    } else {
+        eprintln!("Formatting: yml - SKIPPED");
+    }
+
+    // fmt nix
+    if has_cmd("nixpkgs-fmt") {
+        eprintln!("Formatting: nix");
+        let mut command = Command::new("nixpkgs-fmt");
+        if fmt_opt.check {
+            command.arg("--check");
+        }
+        command.arg("nix");
+        command.arg("shell.nix");
+
+        match run_cmd(command) {
+            Ok(_) => {
+                eprintln!("✅ nix files formatted")
+            }
+            Err(e) => {
+                if fmt_opt.check {
+                    eprintln!("❌ nix files do not pass check");
+                } else {
+                    eprintln!("❌ nix formatter failed: {e:#?}");
+                }
+            }
+        }
+    } else {
+        eprintln!("Formatting: nix - SKIPPED");
+    }
+
+    Ok(())
+}
+
+fn has_cmd(target_cmd: &str) -> bool {
+    #[cfg(target_os = "windows")]
+    let mut cmd = Command::new("where");
+    #[cfg(target_family = "unix")]
+    let mut cmd = Command::new("which");
+    cmd.arg(target_cmd);
+    run_cmd(cmd).is_ok()
+}
+
 fn main() -> Result<()> {
     let opt = Opt::parse();
 
     match &opt.action {
         Action::Build(build_opt) => build(build_opt),
+        Action::CheckRaw(_) => check_raw::check_raw(),
         Action::Clippy(clippy_opt) => clippy(clippy_opt),
         Action::Doc(doc_opt) => doc(doc_opt),
         Action::GenCode(gen_opt) => device_path::gen_code(gen_opt),
         Action::Miri(_) => run_miri(),
         Action::Run(qemu_opt) => run_vm_tests(qemu_opt),
         Action::Test(test_opt) => run_host_tests(test_opt),
+        Action::Fmt(fmt_opt) => run_fmt_project(fmt_opt),
     }
 }

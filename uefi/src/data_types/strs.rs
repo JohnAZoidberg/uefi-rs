@@ -1,6 +1,7 @@
 use super::chars::{Char16, Char8, NUL_16, NUL_8};
 use super::UnalignedSlice;
 use crate::polyfill::maybe_uninit_slice_assume_init_ref;
+use core::borrow::Borrow;
 use core::ffi::CStr;
 use core::iter::Iterator;
 use core::mem::MaybeUninit;
@@ -67,7 +68,7 @@ pub enum FromStrWithBufError {
 /// For convenience, a [`CStr8`] is comparable with [`core::str`] and
 /// `alloc::string::String` from the standard library through the trait [`EqStrUntilNul`].
 #[repr(transparent)]
-#[derive(Eq, PartialEq)]
+#[derive(Eq, PartialEq, Ord, PartialOrd)]
 pub struct CStr8([Char8]);
 
 impl CStr8 {
@@ -118,16 +119,10 @@ impl CStr8 {
         self.0.as_ptr()
     }
 
-    /// Converts this CStr8 to a slice of bytes without the terminating null byte.
+    /// Returns the underlying bytes as slice including the terminating null
+    /// character.
     #[must_use]
-    pub fn to_bytes(&self) -> &[u8] {
-        let chars = self.to_bytes_with_nul();
-        &chars[..chars.len() - 1]
-    }
-
-    /// Converts this CStr8 to a slice of bytes containing the trailing null byte.
-    #[must_use]
-    pub const fn to_bytes_with_nul(&self) -> &[u8] {
+    pub const fn as_bytes(&self) -> &[u8] {
         unsafe { &*(&self.0 as *const [Char8] as *const [u8]) }
     }
 }
@@ -144,6 +139,18 @@ impl fmt::Display for CStr8 {
             <Char8 as fmt::Display>::fmt(c, f)?;
         }
         Ok(())
+    }
+}
+
+impl AsRef<[u8]> for CStr8 {
+    fn as_ref(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+
+impl Borrow<[u8]> for CStr8 {
+    fn borrow(&self) -> &[u8] {
+        self.as_bytes()
     }
 }
 
@@ -175,14 +182,14 @@ impl<'a> TryFrom<&'a CStr> for &'a CStr8 {
     }
 }
 
-/// An UCS-2 null-terminated string.
+/// An UCS-2 null-terminated string slice.
 ///
 /// This type is largely inspired by [`core::ffi::CStr`] with the exception that all characters are
 /// guaranteed to be 16 bit long.
 ///
 /// For convenience, a [`CStr16`] is comparable with [`core::str`] and
 /// `alloc::string::String` from the standard library through the trait [`EqStrUntilNul`].
-#[derive(Eq, PartialEq)]
+#[derive(Eq, PartialEq, Ord, PartialOrd)]
 #[repr(transparent)]
 pub struct CStr16([Char16]);
 
@@ -204,10 +211,8 @@ impl CStr16 {
         Self::from_u16_with_nul_unchecked(slice::from_raw_parts(ptr, len + 1))
     }
 
-    /// Creates a C string wrapper from a u16 slice
-    ///
-    /// Since not every u16 value is a valid UCS-2 code point, this function
-    /// must do a bit more validity checking than CStr::from_bytes_with_nul
+    /// Creates a `&CStr16` from a u16 slice, if the slice contains exactly
+    /// one terminating null-byte and all chars are valid UCS-2 chars.
     pub fn from_u16_with_nul(codes: &[u16]) -> Result<&Self, FromSliceWithNulError> {
         for (pos, &code) in codes.iter().enumerate() {
             match code.try_into() {
@@ -227,7 +232,7 @@ impl CStr16 {
         Err(FromSliceWithNulError::NotNulTerminated)
     }
 
-    /// Unsafely creates a C string wrapper from a u16 slice.
+    /// Unsafely creates a `&CStr16` from a u16 slice.
     ///
     /// # Safety
     ///
@@ -280,11 +285,13 @@ impl CStr16 {
         Self::from_u16_with_nul(&buf[..index + 1]).map_err(|err| match err {
             FromSliceWithNulError::InvalidChar(p) => FromStrWithBufError::InvalidChar(p),
             FromSliceWithNulError::InteriorNul(p) => FromStrWithBufError::InteriorNul(p),
-            FromSliceWithNulError::NotNulTerminated => unreachable!(),
+            FromSliceWithNulError::NotNulTerminated => {
+                unreachable!()
+            }
         })
     }
 
-    /// Create a [`CStr16`] from an [`UnalignedSlice`] using an aligned
+    /// Create a `&CStr16` from an [`UnalignedSlice`] using an aligned
     /// buffer for storage. The lifetime of the output is tied to `buf`,
     /// not `src`.
     pub fn from_unaligned_slice<'buf>(
@@ -389,6 +396,25 @@ impl CStr16 {
         }
         Ok(())
     }
+
+    /// Returns the underlying bytes as slice including the terminating null
+    /// character.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        unsafe { slice::from_raw_parts(self.0.as_ptr().cast(), self.num_bytes()) }
+    }
+}
+
+impl AsRef<[u8]> for CStr16 {
+    fn as_ref(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+
+impl Borrow<[u8]> for CStr16 {
+    fn borrow(&self) -> &[u8] {
+        self.as_bytes()
+    }
 }
 
 #[cfg(feature = "alloc")]
@@ -420,6 +446,12 @@ impl<StrType: AsRef<str> + ?Sized> EqStrUntilNul<StrType> for CStr16 {
             .any(|(l, r)| l != r);
 
         !any_not_equal
+    }
+}
+
+impl AsRef<CStr16> for CStr16 {
+    fn as_ref(&self) -> &CStr16 {
+        self
     }
 }
 
@@ -523,6 +555,14 @@ mod tests {
     }
 
     #[test]
+    fn test_cstr8_as_bytes() {
+        let string: &CStr8 = cstr8!("a");
+        assert_eq!(string.as_bytes(), &[b'a', 0]);
+        assert_eq!(<CStr8 as AsRef<[u8]>>::as_ref(string), &[b'a', 0]);
+        assert_eq!(<CStr8 as Borrow<[u8]>>::borrow(string), &[b'a', 0]);
+    }
+
+    #[test]
     fn test_cstr16_num_bytes() {
         let s = CStr16::from_u16_with_nul(&[65, 66, 67, 0]).unwrap();
         assert_eq!(s.num_bytes(), 8);
@@ -615,6 +655,14 @@ mod tests {
             string.as_slice_with_nul(),
             &[Char16::try_from('a').unwrap(), NUL_16]
         );
+    }
+
+    #[test]
+    fn test_cstr16_as_bytes() {
+        let string: &CStr16 = cstr16!("a");
+        assert_eq!(string.as_bytes(), &[b'a', 0, 0, 0]);
+        assert_eq!(<CStr16 as AsRef<[u8]>>::as_ref(string), &[b'a', 0, 0, 0]);
+        assert_eq!(<CStr16 as Borrow<[u8]>>::borrow(string), &[b'a', 0, 0, 0]);
     }
 
     // Code generation helper for the compare tests of our CStrX types against "str" and "String"

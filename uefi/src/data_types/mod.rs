@@ -3,12 +3,12 @@
 //! This module defines the basic data types that are used throughout uefi-rs
 
 use core::ffi::c_void;
-use core::ptr::NonNull;
+use core::ptr::{self, NonNull};
 
 /// Opaque handle to an UEFI entity (protocol, image...), guaranteed to be non-null.
 ///
 /// If you need to have a nullable handle (for a custom UEFI FFI for example) use `Option<Handle>`.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(transparent)]
 pub struct Handle(NonNull<c_void>);
 
@@ -36,6 +36,16 @@ impl Handle {
         // shorthand for "|ptr| Self(ptr)"
         NonNull::new(ptr).map(Self)
     }
+
+    /// Get the underlying raw pointer.
+    #[must_use]
+    pub fn as_ptr(&self) -> *mut c_void {
+        self.0.as_ptr()
+    }
+
+    pub(crate) fn opt_to_ptr(handle: Option<Self>) -> *mut c_void {
+        handle.map(|h| h.0.as_ptr()).unwrap_or(ptr::null_mut())
+    }
 }
 
 /// Handle to an event structure, guaranteed to be non-null.
@@ -55,6 +65,21 @@ impl Event {
     #[must_use]
     pub const unsafe fn unsafe_clone(&self) -> Self {
         Self(self.0)
+    }
+
+    /// Create an `Event` from a raw pointer.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that the pointer is valid.
+    pub unsafe fn from_ptr(ptr: *mut c_void) -> Option<Self> {
+        NonNull::new(ptr).map(Self)
+    }
+
+    /// Get the underlying raw pointer.
+    #[must_use]
+    pub fn as_ptr(&self) -> *mut c_void {
+        self.0.as_ptr()
     }
 }
 
@@ -113,22 +138,11 @@ pub trait Align {
     }
 }
 
-/// Physical memory address. This is always a 64-bit value, regardless
-/// of target platform.
-pub type PhysicalAddress = u64;
-
-/// Virtual memory address. This is always a 64-bit value, regardless
-/// of target platform.
-pub type VirtualAddress = u64;
-
 mod guid;
 pub use self::guid::{Guid, Identify};
 
 pub mod chars;
 pub use self::chars::{Char16, Char8};
-
-#[macro_use]
-mod enums;
 
 #[macro_use]
 mod opaque;
@@ -145,6 +159,8 @@ pub use self::owned_strs::{CString16, FromStrError};
 
 mod unaligned_slice;
 pub use unaligned_slice::UnalignedSlice;
+
+pub use uefi_raw::{PhysicalAddress, VirtualAddress};
 
 #[cfg(test)]
 mod tests {

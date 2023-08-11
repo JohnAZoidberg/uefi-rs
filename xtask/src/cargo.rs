@@ -9,6 +9,7 @@ pub enum Package {
     Uefi,
     UefiApp,
     UefiMacros,
+    UefiRaw,
     UefiServices,
     UefiTestRunner,
     Xtask,
@@ -20,6 +21,7 @@ impl Package {
             Self::Uefi => "uefi",
             Self::UefiApp => "uefi_app",
             Self::UefiMacros => "uefi-macros",
+            Self::UefiRaw => "uefi-raw",
             Self::UefiServices => "uefi-services",
             Self::UefiTestRunner => "uefi-test-runner",
             Self::Xtask => "xtask",
@@ -28,7 +30,12 @@ impl Package {
 
     /// All published packages.
     pub fn published() -> Vec<Package> {
-        vec![Self::Uefi, Self::UefiMacros, Self::UefiServices]
+        vec![
+            Self::Uefi,
+            Self::UefiMacros,
+            Self::UefiRaw,
+            Self::UefiServices,
+        ]
     }
 
     /// All the packages except for xtask.
@@ -37,6 +44,7 @@ impl Package {
             Self::Uefi,
             Self::UefiApp,
             Self::UefiMacros,
+            Self::UefiRaw,
             Self::UefiServices,
             Self::UefiTestRunner,
         ]
@@ -58,6 +66,7 @@ pub enum Feature {
     ServicesLogger,
 
     // `uefi-test-runner` features.
+    DebugSupport,
     MultiProcessor,
     Pxe,
     TestUnstable,
@@ -78,6 +87,7 @@ impl Feature {
             Self::Qemu => "uefi-services/qemu",
             Self::ServicesLogger => "uefi-services/logger",
 
+            Self::DebugSupport => "uefi-test-runner/debug_support",
             Self::MultiProcessor => "uefi-test-runner/multi_processor",
             Self::Pxe => "uefi-test-runner/pxe",
             Self::TestUnstable => "uefi-test-runner/unstable",
@@ -99,6 +109,7 @@ impl Feature {
             Package::UefiServices => vec![Self::PanicHandler, Self::Qemu, Self::ServicesLogger],
             Package::UefiTestRunner => {
                 vec![
+                    Self::DebugSupport,
                     Self::MultiProcessor,
                     Self::Pxe,
                     Self::TestUnstable,

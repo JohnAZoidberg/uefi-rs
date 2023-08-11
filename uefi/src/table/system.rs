@@ -2,14 +2,14 @@ use core::ffi::c_void;
 use core::fmt::{Debug, Formatter};
 use core::marker::PhantomData;
 use core::ptr::NonNull;
-use core::{ptr, slice};
+use core::slice;
 
 use crate::proto::console::text;
-use crate::{CStr16, Char16, Handle, Result, Status};
+use crate::{CStr16, Result, Status, StatusExt};
 
 use super::boot::{BootServices, MemoryDescriptor, MemoryMap, MemoryType};
 use super::runtime::{ResetType, RuntimeServices};
-use super::{cfg, Header, Revision};
+use super::{cfg, Revision};
 
 /// Marker trait used to provide different views of the UEFI System Table.
 pub trait SystemTableView {}
@@ -47,7 +47,7 @@ impl SystemTableView for Runtime {}
 /// will be provided to replace it.
 #[repr(transparent)]
 pub struct SystemTable<View: SystemTableView> {
-    table: *const SystemTableImpl,
+    table: *const uefi_raw::table::system::SystemTable,
     _marker: PhantomData<View>,
 }
 
@@ -56,13 +56,13 @@ impl<View: SystemTableView> SystemTable<View> {
     /// Return the firmware vendor string
     #[must_use]
     pub fn firmware_vendor(&self) -> &CStr16 {
-        unsafe { CStr16::from_ptr((*self.table).fw_vendor) }
+        unsafe { CStr16::from_ptr((*self.table).firmware_vendor.cast()) }
     }
 
     /// Return the firmware revision
     #[must_use]
     pub const fn firmware_revision(&self) -> u32 {
-        unsafe { (*self.table).fw_revision }
+        unsafe { (*self.table).firmware_revision }
     }
 
     /// Returns the revision of this table, which is defined to be
@@ -77,7 +77,15 @@ impl<View: SystemTableView> SystemTable<View> {
     #[allow(clippy::missing_const_for_fn)] // Required until we bump the MSRV.
     #[must_use]
     pub fn config_table(&self) -> &[cfg::ConfigTableEntry] {
-        unsafe { slice::from_raw_parts((*self.table).cfg_table, (*self.table).nr_cfg) }
+        unsafe {
+            let table = &*self.table;
+            table
+                .configuration_table
+                .cast::<cfg::ConfigTableEntry>()
+                .as_ref()
+                .map(|ptr| slice::from_raw_parts(ptr, table.number_of_configuration_table_entries))
+                .unwrap_or(&[])
+        }
     }
 
     /// Creates a new `SystemTable<View>` from a raw address. The address might
@@ -112,7 +120,7 @@ impl<View: SystemTableView> SystemTable<View> {
 impl SystemTable<Boot> {
     /// Returns the standard input protocol.
     pub fn stdin(&mut self) -> &mut text::Input {
-        unsafe { &mut *(*self.table).stdin }
+        unsafe { &mut *(*self.table).stdin.cast() }
     }
 
     /// Returns the standard output protocol.
@@ -133,13 +141,13 @@ impl SystemTable<Boot> {
     /// Access runtime services
     #[must_use]
     pub const fn runtime_services(&self) -> &RuntimeServices {
-        unsafe { &*(*self.table).runtime }
+        unsafe { &*(*self.table).runtime_services.cast_const().cast() }
     }
 
     /// Access boot services
     #[must_use]
     pub const fn boot_services(&self) -> &BootServices {
-        unsafe { &*(*self.table).boot }
+        unsafe { &*(*self.table).boot_services.cast_const().cast() }
     }
 
     /// Get the size in bytes of the buffer to allocate for storing the memory
@@ -222,7 +230,7 @@ impl SystemTable<Boot> {
         let boot_services = self.boot_services();
 
         // Reboot the device.
-        let reset = |status| -> ! { self.runtime_services().reset(ResetType::Cold, status, None) };
+        let reset = |status| -> ! { self.runtime_services().reset(ResetType::COLD, status, None) };
 
         // Get the size of the buffer to allocate. If that calculation
         // overflows treat it as an unrecoverable error.
@@ -297,7 +305,7 @@ impl SystemTable<Runtime> {
     /// "Calling Conventions" chapter of the UEFI specification for details.
     #[must_use]
     pub const unsafe fn runtime_services(&self) -> &RuntimeServices {
-        &*(*self.table).runtime
+        &*(*self.table).runtime_services.cast_const().cast()
     }
 
     /// Changes the runtime addressing mode of EFI firmware from physical to virtual.
@@ -321,22 +329,18 @@ impl SystemTable<Runtime> {
         // See https://rust-lang.github.io/unsafe-code-guidelines/layout/arrays-and-slices.html
         let map_size = core::mem::size_of_val(map);
         let entry_size = core::mem::size_of::<MemoryDescriptor>();
-        let entry_version = crate::table::boot::MEMORY_DESCRIPTOR_VERSION;
+        let entry_version = MemoryDescriptor::VERSION;
         let map_ptr = map.as_mut_ptr();
-        ((*(*self.table).runtime).set_virtual_address_map)(
-            map_size,
-            entry_size,
-            entry_version,
-            map_ptr,
-        )
-        .into_with_val(|| {
-            let new_table_ref =
-                &mut *(new_system_table_virtual_addr as usize as *mut SystemTableImpl);
-            Self {
-                table: new_table_ref,
-                _marker: PhantomData,
-            }
-        })
+        self.runtime_services()
+            .set_virtual_address_map(map_size, entry_size, entry_version, map_ptr)
+            .to_result_with_val(|| {
+                let new_table_ref = &mut *(new_system_table_virtual_addr as usize
+                    as *mut uefi_raw::table::system::SystemTable);
+                Self {
+                    table: new_table_ref,
+                    _marker: PhantomData,
+                }
+            })
     }
 
     /// Return the address of the SystemTable that resides in a UEFI runtime services
@@ -347,51 +351,6 @@ impl SystemTable<Runtime> {
     }
 }
 
-/// The actual UEFI system table
-#[repr(C)]
-struct SystemTableImpl {
-    header: Header,
-    /// Null-terminated string representing the firmware's vendor.
-    fw_vendor: *const Char16,
-    fw_revision: u32,
-    stdin_handle: Handle,
-    stdin: *mut text::Input,
-    stdout_handle: Handle,
-    stdout: *mut text::Output,
-    stderr_handle: Handle,
-    stderr: *mut text::Output,
-    /// Runtime services table.
-    runtime: *const RuntimeServices,
-    /// Boot services table.
-    boot: *const BootServices,
-    /// Number of entries in the configuration table.
-    nr_cfg: usize,
-    /// Pointer to beginning of the array.
-    cfg_table: *const cfg::ConfigTableEntry,
-}
-
 impl<View: SystemTableView> super::Table for SystemTable<View> {
     const SIGNATURE: u64 = 0x5453_5953_2049_4249;
-}
-
-impl Debug for SystemTableImpl {
-    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("UefiSystemTable")
-            .field("header", &self.header)
-            .field("fw_vendor", &(unsafe { CStr16::from_ptr(self.fw_vendor) }))
-            .field("fw_revision", &self.fw_revision)
-            .field("stdin_handle", &self.stdin_handle)
-            .field("stdin", &self.stdin)
-            .field("stdout_handle", &self.stdout_handle)
-            .field("stdout", &self.stdout)
-            .field("stderr_handle", &self.stderr_handle)
-            .field("stderr", &self.stderr)
-            .field("runtime", &self.runtime)
-            // a little bit of extra work needed to call debug-fmt on the BootServices
-            // instead of printing the raw pointer
-            .field("boot", &(unsafe { ptr::read(self.boot) }))
-            .field("nf_cfg", &self.nr_cfg)
-            .field("cfg_table", &self.cfg_table)
-            .finish()
-    }
 }

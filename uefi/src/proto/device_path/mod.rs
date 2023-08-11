@@ -83,9 +83,21 @@ pub use device_path_gen::{
 
 use crate::proto::{unsafe_protocol, ProtocolPointer};
 use core::ffi::c_void;
-use core::fmt::{self, Debug, Formatter};
+use core::fmt::{self, Debug, Display, Formatter};
 use core::mem;
+use core::ops::Deref;
 use ptr_meta::Pointee;
+
+#[cfg(feature = "alloc")]
+use {
+    crate::proto::device_path::text::{AllowShortcuts, DevicePathToText, DisplayOnly},
+    crate::table::boot::{
+        BootServices, OpenProtocolAttributes, OpenProtocolParams, ScopedProtocol, SearchType,
+    },
+    crate::{CString16, Identify},
+    alloc::borrow::ToOwned,
+    alloc::boxed::Box,
+};
 
 opaque_type! {
     /// Opaque type that should be used to represent a pointer to a
@@ -110,7 +122,23 @@ pub struct DevicePathHeader {
 /// A single node within a [`DevicePath`].
 ///
 /// Each node starts with a [`DevicePathHeader`]. The rest of the data
-/// in the node depends on the type of node.
+/// in the node depends on the type of node. You can "cast" a node to a specific
+/// one like this:
+/// ```no_run
+/// use uefi::proto::device_path::DevicePath;
+/// use uefi::proto::device_path::media::FilePath;
+///
+/// let image_device_path: &DevicePath = unsafe { DevicePath::from_ffi_ptr(0x1337 as *const _) };
+/// let file_path = image_device_path
+///         .node_iter()
+///         .find_map(|node| {
+///             let node: &FilePath = node.try_into().ok()?;
+///             let path = node.path_name().to_cstring16().ok()?;
+///             Some(path.to_string().to_uppercase())
+///         });
+/// ```
+/// More types are available in [`uefi::proto::device_path`]. Builder types
+/// can be found in [`uefi::proto::device_path::build`]
 ///
 /// See the [module-level documentation] for more details.
 ///
@@ -175,10 +203,41 @@ impl DevicePathNode {
         self.full_type() == (DeviceType::END, DeviceSubType::END_ENTIRE)
     }
 
+    /// Returns the payload data of this node.
+    #[must_use]
+    pub fn data(&self) -> &[u8] {
+        &self.data
+    }
+
     /// Convert from a generic [`DevicePathNode`] reference to an enum
     /// of more specific node types.
     pub fn as_enum(&self) -> Result<DevicePathNodeEnum, NodeConversionError> {
         DevicePathNodeEnum::try_from(self)
+    }
+
+    /// Transforms the device path node to its string representation using the
+    /// [`DevicePathToText`] protocol.
+    ///
+    /// The resulting string is only None, if there was not enough memory.
+    #[cfg(feature = "alloc")]
+    pub fn to_string(
+        &self,
+        bs: &BootServices,
+        display_only: DisplayOnly,
+        allow_shortcuts: AllowShortcuts,
+    ) -> Result<Option<CString16>, DevicePathToTextError> {
+        let to_text_protocol = open_text_protocol(bs)?;
+
+        let cstring16 = to_text_protocol
+            .convert_device_node_to_text(bs, self, display_only, allow_shortcuts)
+            .ok()
+            .map(|pool_string| {
+                let cstr16 = &*pool_string;
+                // Another allocation; pool string is dropped. This overhead
+                // is negligible. CString16 is more convenient to use.
+                CString16::from(cstr16)
+            });
+        Ok(cstring16)
     }
 }
 
@@ -225,6 +284,21 @@ impl DevicePathInstance {
             stop_condition: StopCondition::AnyEndNode,
         }
     }
+
+    /// Returns a slice of the underlying bytes.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8] {
+        &self.data
+    }
+
+    /// Returns a boxed copy of that value.
+    #[cfg(feature = "alloc")]
+    #[must_use]
+    pub fn to_boxed(&self) -> Box<Self> {
+        let data = self.data.to_owned();
+        let data = data.into_boxed_slice();
+        unsafe { mem::transmute(data) }
+    }
 }
 
 impl Debug for DevicePathInstance {
@@ -241,17 +315,30 @@ impl PartialEq for DevicePathInstance {
     }
 }
 
+#[cfg(feature = "alloc")]
+impl ToOwned for DevicePathInstance {
+    type Owned = Box<DevicePathInstance>;
+
+    fn to_owned(&self) -> Self::Owned {
+        self.to_boxed()
+    }
+}
+
 /// Device path protocol.
 ///
-/// A device path contains one or more device path instances made of up
-/// variable-length nodes. It ends with an [`END_ENTIRE`] node.
+/// Can be used on any device handle to obtain generic path/location information
+/// concerning the physical device or logical device. If the handle does not
+/// logically map to a physical device, the handle may not necessarily support
+/// the device path protocol. The device path describes the location of the
+/// device the handle is for. The size of the Device Path can be determined from
+/// the structures that make up the Device Path.
 ///
 /// See the [module-level documentation] for more details.
 ///
 /// [module-level documentation]: crate::proto::device_path
 /// [`END_ENTIRE`]: DeviceSubType::END_ENTIRE
 #[repr(C, packed)]
-#[unsafe_protocol("09576e91-6d3f-11d2-8e39-00a0c969723b")]
+#[unsafe_protocol(uefi_raw::protocol::device_path::DevicePathProtocol::GUID)]
 #[derive(Eq, Pointee)]
 pub struct DevicePath {
     data: [u8],
@@ -325,6 +412,46 @@ impl DevicePath {
             stop_condition: StopCondition::EndEntireNode,
         }
     }
+
+    /// Returns a slice of the underlying bytes.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8] {
+        &self.data
+    }
+
+    /// Returns a boxed copy of that value.
+    #[cfg(feature = "alloc")]
+    #[must_use]
+    pub fn to_boxed(&self) -> Box<Self> {
+        let data = self.data.to_owned();
+        let data = data.into_boxed_slice();
+        unsafe { mem::transmute(data) }
+    }
+
+    /// Transforms the device path to its string representation using the
+    /// [`DevicePathToText`] protocol.
+    ///
+    /// The resulting string is only None, if there was not enough memory.
+    #[cfg(feature = "alloc")]
+    pub fn to_string(
+        &self,
+        bs: &BootServices,
+        display_only: DisplayOnly,
+        allow_shortcuts: AllowShortcuts,
+    ) -> Result<Option<CString16>, DevicePathToTextError> {
+        let to_text_protocol = open_text_protocol(bs)?;
+
+        let cstring16 = to_text_protocol
+            .convert_device_path_to_text(bs, self, display_only, allow_shortcuts)
+            .ok()
+            .map(|pool_string| {
+                let cstr16 = &*pool_string;
+                // Another allocation; pool string is dropped. This overhead
+                // is negligible. CString16 is more convenient to use.
+                CString16::from(cstr16)
+            });
+        Ok(cstring16)
+    }
 }
 
 impl Debug for DevicePath {
@@ -338,6 +465,15 @@ impl Debug for DevicePath {
 impl PartialEq for DevicePath {
     fn eq(&self, other: &Self) -> bool {
         self.data == other.data
+    }
+}
+
+#[cfg(feature = "alloc")]
+impl ToOwned for DevicePath {
+    type Owned = Box<DevicePath>;
+
+    fn to_owned(&self) -> Self::Owned {
+        self.to_boxed()
     }
 }
 
@@ -610,10 +746,98 @@ pub enum NodeConversionError {
     UnsupportedType,
 }
 
+/// Protocol for accessing the device path that was passed in to [`load_image`]
+/// when loading a PE/COFF image.
+///
+/// The layout of this type is the same as a [`DevicePath`].
+///
+/// [`load_image`]: crate::table::boot::BootServices::load_image
+#[repr(transparent)]
+#[unsafe_protocol("bc62157e-3e33-4fec-9920-2d3b36d750df")]
+#[derive(Pointee)]
+pub struct LoadedImageDevicePath(DevicePath);
+
+impl ProtocolPointer for LoadedImageDevicePath {
+    unsafe fn ptr_from_ffi(ptr: *const c_void) -> *const Self {
+        ptr_meta::from_raw_parts(ptr.cast(), DevicePath::size_in_bytes_from_ptr(ptr))
+    }
+
+    unsafe fn mut_ptr_from_ffi(ptr: *mut c_void) -> *mut Self {
+        ptr_meta::from_raw_parts_mut(ptr.cast(), DevicePath::size_in_bytes_from_ptr(ptr))
+    }
+}
+
+impl Deref for LoadedImageDevicePath {
+    type Target = DevicePath;
+
+    fn deref(&self) -> &DevicePath {
+        &self.0
+    }
+}
+
+/// Errors that may happen when a device path is transformed to a string
+/// representation using:
+/// - [`DevicePath::to_string`]
+/// - [`DevicePathNode::to_string`]
+#[derive(Debug)]
+pub enum DevicePathToTextError {
+    /// Can't locate a handle buffer with handles associated with the
+    /// [`DevicePathToText`] protocol.
+    CantLocateHandleBuffer(crate::Error),
+    /// There is no handle supporting the [`DevicePathToText`] protocol.
+    NoHandle,
+    /// The handle supporting the [`DevicePathToText`] protocol exists but it
+    /// could not be opened.
+    CantOpenProtocol(crate::Error),
+}
+
+impl Display for DevicePathToTextError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+
+#[cfg(feature = "unstable")]
+impl core::error::Error for DevicePathToTextError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        match self {
+            DevicePathToTextError::CantLocateHandleBuffer(e) => Some(e),
+            DevicePathToTextError::CantOpenProtocol(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+/// Helper function to open the [`DevicePathToText`] protocol using the boot
+/// services.
+#[cfg(feature = "alloc")]
+fn open_text_protocol(
+    bs: &BootServices,
+) -> Result<ScopedProtocol<DevicePathToText>, DevicePathToTextError> {
+    let &handle = bs
+        .locate_handle_buffer(SearchType::ByProtocol(&DevicePathToText::GUID))
+        .map_err(DevicePathToTextError::CantLocateHandleBuffer)?
+        .first()
+        .ok_or(DevicePathToTextError::NoHandle)?;
+
+    unsafe {
+        bs.open_protocol::<DevicePathToText>(
+            OpenProtocolParams {
+                handle,
+                agent: bs.image_handle(),
+                controller: None,
+            },
+            OpenProtocolAttributes::GetProtocol,
+        )
+    }
+    .map_err(DevicePathToTextError::CantOpenProtocol)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use alloc::vec::Vec;
+    use core::mem::{size_of, size_of_val};
 
     /// Create a node to `path` from raw data.
     fn add_node(path: &mut Vec<u8>, device_type: u8, sub_type: u8, node_data: &[u8]) {
@@ -717,5 +941,21 @@ mod tests {
 
         // Only two instances.
         assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn test_to_owned() {
+        // Relevant assertion to verify the transmute is fine.
+        assert_eq!(size_of::<&DevicePath>(), size_of::<&[u8]>());
+
+        let raw_data = create_raw_device_path();
+        let dp = unsafe { DevicePath::from_ffi_ptr(raw_data.as_ptr().cast()) };
+
+        // Relevant assertion to verify the transmute is fine.
+        assert_eq!(size_of_val(dp), size_of_val(&dp.data));
+
+        let owned_dp = dp.to_owned();
+        let owned_dp_ref = &*owned_dp;
+        assert_eq!(owned_dp_ref, dp)
     }
 }

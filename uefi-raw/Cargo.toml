@@ -1,0 +1,21 @@
+[package]
+name = "uefi-raw"
+version = "0.3.0"
+readme = "README.md"
+description = "Raw UEFI types"
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+keywords.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bitflags.workspace = true
+ptr_meta.workspace = true
+uguid = "2.0.0"
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]

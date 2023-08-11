@@ -68,7 +68,7 @@ trait InfoInternal: Align + ptr_meta::Pointee<Metadata = usize> {
     {
         // Calculate the final size of the struct.
         let name_length_ucs2 = name.as_slice_with_nul().len();
-        let name_size = name_length_ucs2 * mem::size_of::<Char16>();
+        let name_size = mem::size_of_val(name.as_slice_with_nul());
         let info_size = Self::name_offset() + name_size;
         let info_size = Self::round_up_to_alignment(info_size);
 
@@ -228,6 +228,18 @@ impl FileInfo {
     #[must_use]
     pub fn file_name(&self) -> &CStr16 {
         unsafe { CStr16::from_ptr(self.file_name.as_ptr()) }
+    }
+
+    /// Returns if the file is a directory.
+    #[must_use]
+    pub fn is_directory(&self) -> bool {
+        self.attribute.contains(FileAttribute::DIRECTORY)
+    }
+
+    /// Returns if the file is a regular file.
+    #[must_use]
+    pub fn is_regular_file(&self) -> bool {
+        !self.is_directory()
     }
 }
 

@@ -1,15 +1,12 @@
 use crate::proto::unsafe_protocol;
-use crate::{Char16, Event, Result, Status};
+use crate::{Char16, Event, Result, Status, StatusExt};
 use core::mem::MaybeUninit;
+use uefi_raw::protocol::console::{InputKey, SimpleTextInputProtocol};
 
 /// Interface for text-based input devices.
-#[repr(C)]
-#[unsafe_protocol("387477c1-69c7-11d2-8e39-00a0c969723b")]
-pub struct Input {
-    reset: extern "efiapi" fn(this: &mut Input, extended: bool) -> Status,
-    read_key_stroke: extern "efiapi" fn(this: &mut Input, key: *mut RawKey) -> Status,
-    wait_for_key: Event,
-}
+#[repr(transparent)]
+#[unsafe_protocol(SimpleTextInputProtocol::GUID)]
+pub struct Input(SimpleTextInputProtocol);
 
 impl Input {
     /// Resets the input device hardware.
@@ -21,7 +18,7 @@ impl Input {
     ///
     /// - `DeviceError` if the device is malfunctioning and cannot be reset.
     pub fn reset(&mut self, extended_verification: bool) -> Result {
-        (self.reset)(self, extended_verification).into()
+        unsafe { (self.0.reset)(&mut self.0, extended_verification) }.to_result()
     }
 
     /// Reads the next keystroke from the input device, if any.
@@ -47,7 +44,7 @@ impl Input {
     /// fn read_keyboard_events(boot_services: &BootServices, input: &mut Input) -> Result {
     ///     loop {
     ///         // Pause until a keyboard event occurs.
-    ///         let mut events = unsafe { [input.wait_for_key_event().unsafe_clone()] };
+    ///         let mut events = unsafe { [input.wait_for_key_event().unwrap()] };
     ///         boot_services
     ///             .wait_for_event(&mut events)
     ///             .discard_errdata()?;
@@ -73,19 +70,19 @@ impl Input {
     /// }
     /// ```
     pub fn read_key(&mut self) -> Result<Option<Key>> {
-        let mut key = MaybeUninit::<RawKey>::uninit();
+        let mut key = MaybeUninit::<InputKey>::uninit();
 
-        match (self.read_key_stroke)(self, key.as_mut_ptr()) {
+        match unsafe { (self.0.read_key_stroke)(&mut self.0, key.as_mut_ptr()) } {
             Status::NOT_READY => Ok(None),
-            other => other.into_with_val(|| Some(unsafe { key.assume_init() }.into())),
+            other => other.to_result_with_val(|| Some(unsafe { key.assume_init() }.into())),
         }
     }
 
     /// Event to be used with `BootServices::wait_for_event()` in order to wait
     /// for a key to be available
     #[must_use]
-    pub const fn wait_for_key_event(&self) -> &Event {
-        &self.wait_for_key
+    pub fn wait_for_key_event(&self) -> Option<Event> {
+        unsafe { Event::from_ptr(self.0.wait_for_key) }
     }
 }
 
@@ -99,26 +96,14 @@ pub enum Key {
     Special(ScanCode),
 }
 
-impl From<RawKey> for Key {
-    fn from(k: RawKey) -> Key {
-        if k.scan_code == ScanCode::NULL {
-            Key::Printable(k.unicode_char)
+impl From<InputKey> for Key {
+    fn from(k: InputKey) -> Key {
+        if k.scan_code == ScanCode::NULL.0 {
+            Key::Printable(Char16::try_from(k.unicode_char).unwrap())
         } else {
-            Key::Special(k.scan_code)
+            Key::Special(ScanCode(k.scan_code))
         }
     }
-}
-
-/// A key read from the console (UEFI version)
-#[repr(C)]
-#[derive(Debug)]
-pub struct RawKey {
-    /// The key's scan code.
-    /// or 0 if printable
-    pub scan_code: ScanCode,
-    /// Associated Unicode character,
-    /// or 0 if not printable.
-    pub unicode_char: Char16,
 }
 
 newtype_enum! {

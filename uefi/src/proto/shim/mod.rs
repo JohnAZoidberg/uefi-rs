@@ -1,7 +1,7 @@
 //! Shim lock protocol.
 
 #![cfg(any(
-    target_arch = "i386",
+    target_arch = "x86",
     target_arch = "x86_64",
     target_arch = "arm",
     target_arch = "aarch64"
@@ -9,7 +9,7 @@
 
 use crate::proto::unsafe_protocol;
 use crate::result::Error;
-use crate::{Result, Status};
+use crate::{Result, Status, StatusExt};
 use core::ffi::c_void;
 use core::mem::MaybeUninit;
 
@@ -45,7 +45,7 @@ pub struct Hashes {
 
 // These macros set the correct calling convention for the Shim protocol methods.
 
-#[cfg(any(target_arch = "i386", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 macro_rules! shim_function {
     (fn $args:tt -> $return_type:ty) => (extern "sysv64" fn $args -> $return_type)
 }
@@ -93,7 +93,7 @@ impl ShimLock {
             .len()
             .try_into()
             .map_err(|_| Error::from(Status::BAD_BUFFER_SIZE))?;
-        (self.verify)(buffer.as_ptr(), size).into()
+        (self.verify)(buffer.as_ptr(), size).to_result()
     }
     /// Compute the Authenticode Hash of the provided EFI application.
     ///
@@ -108,7 +108,7 @@ impl ShimLock {
             .map_err(|_| Error::from(Status::BAD_BUFFER_SIZE))?;
 
         let mut context = MaybeUninit::<Context>::uninit();
-        Result::from((self.context)(ptr, size, context.as_mut_ptr()))?;
+        (self.context)(ptr, size, context.as_mut_ptr()).to_result()?;
         (self.hash)(
             ptr,
             size,
@@ -116,6 +116,6 @@ impl ShimLock {
             &mut hashes.sha256,
             &mut hashes.sha1,
         )
-        .into()
+        .to_result()
     }
 }

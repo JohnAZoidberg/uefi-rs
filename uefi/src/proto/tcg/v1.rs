@@ -13,7 +13,7 @@ use crate::data_types::PhysicalAddress;
 use crate::polyfill::maybe_uninit_slice_as_mut_ptr;
 use crate::proto::unsafe_protocol;
 use crate::util::{ptr_write_unaligned_and_add, usize_from_u32};
-use crate::{Error, Result, Status};
+use crate::{Error, Result, Status, StatusExt};
 use core::fmt::{self, Debug, Formatter};
 use core::marker::PhantomData;
 use core::mem::{self, MaybeUninit};
@@ -60,7 +60,7 @@ impl BootServiceCapability {
     pub fn hash_algorithm(&self) -> HashAlgorithm {
         // Safety: the value should always be 0x1 (indicating SHA-1), but
         // we don't care if it's some unexpected value.
-        unsafe { HashAlgorithm::from_bits_unchecked(u32::from(self.hash_algorithm_bitmap)) }
+        HashAlgorithm::from_bits_retain(u32::from(self.hash_algorithm_bitmap))
     }
 
     /// Whether the TPM device is present.
@@ -450,7 +450,7 @@ impl Tcg {
 
         let event_ptr: *const PcrEvent = event;
 
-        unsafe { (self.log_event)(self, event_ptr.cast(), &mut event_number, flags).into() }
+        unsafe { (self.log_event)(self, event_ptr.cast(), &mut event_number, flags).to_result() }
     }
 
     /// Extend a PCR and add an entry to the event log.
@@ -489,7 +489,7 @@ impl Tcg {
                 &mut event_number,
                 &mut event_log_last_entry,
             )
-            .into()
+            .to_result()
         }
     }
 
@@ -520,7 +520,7 @@ impl Tcg {
                 output_parameter_block_len,
                 output_parameter_block.as_mut_ptr(),
             )
-            .into()
+            .to_result()
         }
     }
 }

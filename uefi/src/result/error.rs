@@ -6,7 +6,7 @@ use core::fmt::{Debug, Display};
 /// An UEFI-related error with optionally additional payload data. The error
 /// kind is encoded in the `status` field (see [`Status`]). Additional payload
 /// may be inside the `data` field.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Error<Data: Debug = ()> {
     status: Status,
     data: Data,
@@ -51,6 +51,20 @@ impl From<Status> for Error<()> {
 impl<Data: Debug> Display for Error<Data> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "UEFI Error {}: {:?}", self.status(), self.data())
+    }
+}
+
+impl<Data: Debug> Error<Data> {
+    /// Transforms the generic payload of an error to `()`. This is useful if
+    /// you want
+    /// - to retain the erroneous status code,
+    /// - do not care about the payload, and
+    /// - refrain from generic type complexity in a higher API level.
+    pub fn to_err_without_payload(&self) -> Error<()> {
+        Error {
+            status: self.status,
+            data: (),
+        }
     }
 }
 

@@ -9,11 +9,14 @@ edition = "2021"
 uefi = { path = "../uefi", features = ["alloc"] }
 uefi-services = { path = "../uefi-services" }
 
-log = { version = "0.4.17", default-features = false }
+log.workspace = true
 
 qemu-exit = "3.0.0"
 
 [features]
+# Enable the debug support protocol test.
+debug_support = []
+
 # Enable the multiprocessor test. This only works if KVM is enabled.
 multi_processor = []
 

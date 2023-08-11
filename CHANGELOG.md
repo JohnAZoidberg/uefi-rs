@@ -2,10 +2,93 @@
 
 ## uefi - [Unreleased]
 
+### Changed
+- `Input::wait_for_key_event` now returns an `Option<Event>`, and is no longer `const`.
+- `Protocol::wait_for_input_event` now returns an `Option<Event>`, and is no longer `const`.
+- `LoadedImage::device` now returns an `Option<Handle>` and is no longer `const`.
+- `BootServices::get_image_file_system` now returns
+  `ScopedProtocol<SimpleFileSystem>` instead of `fs::FileSystem`.
+- `uefi::proto::shim` is now available on 32-bit x86 targets.
+- `Parity` and `StopBits` are now a newtype-enums instead of Rust enums. Their
+  members now have upper-case names.
+- `FileSystem::try_exists` now returns `FileSystemResult<bool>`.
+- `FileSystem::copy` is now more efficient for large files.
+- `MpService::startup_all_aps` and `MpService::startup_this_ap` now accept an
+    optional `event` parameter to allow non-blocking operation.
+
+### Removed
+- `BootServices::memmove` and `BootServices::set_mem` have been removed, use
+  standard functions like `core::ptr::copy` and `core::ptr::write_bytes` instead.
+
+## uefi-macros - [Unreleased]
+
+## uefi-services - [Unreleased]
+
+## uefi - 0.24.0 (2023-06-20)
+
+### Added
+- `DevicePath::to_boxed`, `DevicePath::to_owned`, and `DevicePath::as_bytes`
+- `DevicePathInstance::to_boxed`, `DevicePathInstance::to_owned`, and `DevicePathInstance::as_bytes`
+- `DevicePathNode::data`
+- Added `Event::from_ptr`, `Event::as_ptr`, and `Handle::as_ptr`.
+- Added `ScopedProtocol::get` and `ScopedProtocol::get_mut` to access
+  potentially-null interfaces without panicking.
+- `DevicePath::to_string` and `DevicePathNode::to_string`
+
+### Changed
+- Renamed `LoadImageSource::FromFilePath` to `LoadImageSource::FromDevicePath`
+- The `Deref` and `DerefMut` impls for `ScopedProtocol` will now panic if the
+  interface pointer is null.
+
+## uefi-services - 0.21.0 (2023-06-20)
+
+### Changed
+
+- Updated to latest version of `uefi`.
+
+## uefi - 0.23.0 (2023-06-04)
+
+### Changed
+
+- Fixed function signature bug in `BootServices::install_configuration_table`.
+
+## uefi-services - 0.20.0 (2023-06-04)
+
+### Changed
+
+- Updated to latest version of `uefi`.
+
+## uefi - 0.22.0 (2023-06-01)
+
+### Added
+
+- Added `BootServices::install_configuration_table`.
+
+### Changed
+
+- Renamed `FileSystemIOErrorContext` to `IoErrorContext`.
+- `ResetType` is now a newtype-enum instead of a Rust enum. Its members now have
+  upper-case names.
+- `PointerMode` and `PointerState` now contain arrays rather than tuples, as
+  tuples are not FFI safe.
+- `RegularFile::read` no longer returns `Option<usize>` in error data. A
+  `BUFFER_TOO_SMALL` error can only occur when reading a directory, not a file.
+- `RegularFile::read` now reads in 1 MiB chunks to avoid a bug in some
+  firmware. This fix also applies to `fs::FileSystem::read`.
+## uefi-services - 0.19.0 (2023-06-01)
+
+### Changed
+
+- Internal updates for changes in `uefi`.
+
+## uefi - 0.21.0 (2023-05-15)
+
 ### Added
 
 - There is a new `fs` module that provides a high-level API for file-system
-  access. The API is close to the `std::fs` module.
+  access. The API is close to the `std::fs` module. The module also provides a
+  `Path` and a `PathBuf` abstraction that is similar to the ones from
+  `std::path`. However, they are adapted for UEFI.
 - Multiple convenience methods for `CString16` and `CStr16`, including:
   - `CStr16::as_slice()`
   - `CStr16::num_chars()`
@@ -19,6 +102,17 @@
   - `From<&CStr16>` for `CString16`
   - `From<&CStr16>` for `String`
   - `From<&CString16>` for `String`
+- Added `RuntimeServices::get_variable_boxed` (requires the `alloc` feature).
+- Added `CStr16::as_bytes`
+- Added `AsRef<[u8]>` and `Borrow<[u8]>` for `Cstr8` and `CStr16`.
+- Added `LoadedImageDevicePath` protocol.
+- Added `FileAttribute::is_directory(&self)` and
+  `FileAttribute::is_regular_file(&self)`
+- Added `LoadedImage::code_type()` and `LoadedImage::data_type()`
+- `Allocator` will now use the memory type of the running UEFI binary:
+  - `MemoryType::LOADER_DATA` for UEFI applications
+  - `MemoryType::BOOT_SERVICES_DATA` for UEFI boot drivers
+  - `MemoryType::RUNTIME_SERVICES_DATA` for UEFI runtime drivers
 
 ### Changed
 
@@ -30,10 +124,43 @@
 - `Image::get_image_file_system` now returns a `fs::FileSystem` instead of the
   protocol.
 - `CString16::default` now always contains a null character.
+- Conversion from `Status` to `Result` has been reworked. The `into_with`,
+  `into_with_val`, and `into_with_err` methods have been removed from
+  `Status`. `impl From<Status> for Result` has also been removed. A new
+  `StatusExt` trait has been added that provides conversion methods to replace
+  the ones that have been removed. `StatusExt` has been added to the prelude.
+- The `Guid` struct and `guid!` macro implementations have been replaced with
+  re-exports from the [`uguid`](https://docs.rs/uguid) crate. The `from_values`
+  method has been removed; usually the `guid!` macro is a more convenient
+  choice, but `new` or `from_bytes` can also be used if needed. There are also a
+  number of new `Guid` methods.
+- The `MEMORY_DESCRIPTOR_VERSION` constant has been moved to
+  `MemoryDescriptor::VERSION`.
+- The `Revision` struct's one field is now public.
+- Renamed `CStr8::to_bytes` to `CStr8::as_bytes` and changed the semantics:
+  The trailing null character is now always included in the returned slice.
+- `DevicePathBuilder::with_vec` now clears the `Vec` before use.
+- `bitflags` bumped from `1.3` to `2.1`
+  - `GptPartitionAttributes` now has 16 additional `TYPE_SPECIFIC_BIT_<N>`
+    constants.
 
-## uefi-macros - [Unreleased]
+## uefi-macros - 0.12.0 (2023-05-15)
 
-## uefi-services - [Unreleased]
+- The `unsafe_protocol` macro no longer makes protocols `!Send` and
+  `!Sync`. Protocols can only be used while boot services are active, and that's
+  already a single-threaded environment, so these negative traits do not have
+  any effect.
+- The `unsafe_protocol` macro now accepts the path of a `Guid` constant in
+  addition to a string literal.
+- The `cstr8` and the `cstr16` macros now both accept `(nothing)` and `""`
+  (empty inputs) to create valid empty strings. They include the null-byte.
+- The `entry` macro now works correctly with docstrings.
+
+## uefi-services - 0.18.0 (2023-05-15)
+
+### Changed
+
+- Internal updates for changes in `uefi`.
 
 ## uefi - 0.20.0 (2023-03-19)
 

@@ -12,7 +12,7 @@
 //! * maintaining MP-related processor status
 
 use crate::proto::unsafe_protocol;
-use crate::{Result, Status};
+use crate::{data_types::Event, Result, Status, StatusExt};
 use bitflags::bitflags;
 use core::ffi::c_void;
 use core::ptr;
@@ -25,8 +25,8 @@ bitflags! {
     /// Flags indicating if the processor is BSP or AP,
     /// if the processor is enabled or disabled, and if
     /// the processor is healthy.
-    #[derive(Default)]
     #[repr(transparent)]
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
     struct StatusFlag: u32 {
         /// Processor is playing the role of BSP.
         const PROCESSOR_AS_BSP_BIT = 1;
@@ -144,21 +144,22 @@ impl MpServices {
         let mut total: usize = 0;
         let mut enabled: usize = 0;
         (self.get_number_of_processors)(self, &mut total, &mut enabled)
-            .into_with_val(|| ProcessorCount { total, enabled })
+            .to_result_with_val(|| ProcessorCount { total, enabled })
     }
 
     /// Gets detailed information on the requested processor at the instant this call is made.
     pub fn get_processor_info(&self, processor_number: usize) -> Result<ProcessorInformation> {
         let mut pi: ProcessorInformation = Default::default();
-        (self.get_processor_info)(self, processor_number, &mut pi).into_with_val(|| pi)
+        (self.get_processor_info)(self, processor_number, &mut pi).to_result_with_val(|| pi)
     }
 
-    /// Executes provided function on all APs in blocking mode.
+    /// Executes provided function on all APs.
     pub fn startup_all_aps(
         &self,
         single_thread: bool,
         procedure: Procedure,
         procedure_argument: *mut c_void,
+        event: Option<Event>,
         timeout: Option<Duration>,
     ) -> Result {
         let timeout_arg = match timeout {
@@ -166,16 +167,21 @@ impl MpServices {
             None => 0,
         };
 
+        let event_arg = match event {
+            Some(event) => event.as_ptr(),
+            None => ptr::null_mut(),
+        };
+
         (self.startup_all_aps)(
             self,
             procedure,
             single_thread,
-            ptr::null_mut(),
+            event_arg,
             timeout_arg,
             procedure_argument,
             ptr::null_mut(),
         )
-        .into()
+        .to_result()
     }
 
     /// Executes provided function on a specific AP in blocking mode.
@@ -184,6 +190,7 @@ impl MpServices {
         processor_number: usize,
         procedure: Procedure,
         procedure_argument: *mut c_void,
+        event: Option<Event>,
         timeout: Option<Duration>,
     ) -> Result {
         let timeout_arg = match timeout {
@@ -191,21 +198,26 @@ impl MpServices {
             None => 0,
         };
 
+        let event_arg = match event {
+            Some(event) => event.as_ptr(),
+            None => ptr::null_mut(),
+        };
+
         (self.startup_this_ap)(
             self,
             procedure,
             processor_number,
-            ptr::null_mut(),
+            event_arg,
             timeout_arg,
             procedure_argument,
             ptr::null_mut(),
         )
-        .into()
+        .to_result()
     }
 
     /// Switches the requested AP to be the BSP from that point onward.
     pub fn switch_bsp(&self, processor_number: usize, enable_old_bsp: bool) -> Result {
-        (self.switch_bsp)(self, processor_number, enable_old_bsp).into()
+        (self.switch_bsp)(self, processor_number, enable_old_bsp).to_result()
     }
 
     /// Enables or disables an AP from this point onward.
@@ -227,12 +239,12 @@ impl MpServices {
             }
             None => ptr::null(),
         };
-        (self.enable_disable_ap)(self, processor_number, enable_ap, health_flag_ptr).into()
+        (self.enable_disable_ap)(self, processor_number, enable_ap, health_flag_ptr).to_result()
     }
 
     /// Gets the handle number of the caller processor.
     pub fn who_am_i(&self) -> Result<usize> {
         let mut processor_number: usize = 0;
-        (self.who_am_i)(self, &mut processor_number).into_with_val(|| processor_number)
+        (self.who_am_i)(self, &mut processor_number).to_result_with_val(|| processor_number)
     }
 }

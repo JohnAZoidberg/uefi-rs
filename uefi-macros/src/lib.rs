@@ -4,12 +4,12 @@ extern crate proc_macro;
 
 use proc_macro::TokenStream;
 
-use proc_macro2::{TokenStream as TokenStream2, TokenTree};
-use quote::{quote, quote_spanned, ToTokens, TokenStreamExt};
+use proc_macro2::TokenStream as TokenStream2;
+use quote::{quote, quote_spanned, TokenStreamExt};
 use syn::spanned::Spanned;
 use syn::{
-    parse_macro_input, parse_quote, Error, Fields, FnArg, Ident, ItemFn, ItemStruct, LitStr, Pat,
-    Visibility,
+    parse_macro_input, parse_quote, Error, Expr, ExprLit, ExprPath, FnArg, Ident, ItemFn,
+    ItemStruct, Lit, LitStr, Pat, Visibility,
 };
 
 macro_rules! err {
@@ -23,13 +23,12 @@ macro_rules! err {
 
 /// Attribute macro for marking structs as UEFI protocols.
 ///
-/// The macro takes one argument, a GUID string.
+/// The macro takes one argument, either a GUID string or the path to a `Guid`
+/// constant.
 ///
-/// The macro can only be applied to a struct, and the struct must have
-/// named fields (i.e. not a unit or tuple struct). It implements the
+/// The macro can only be applied to a struct. It implements the
 /// [`Protocol`] trait and the `unsafe` [`Identify`] trait for the
-/// struct. It also adds a hidden field that causes the struct to be
-/// marked as [`!Send` and `!Sync`][send-and-sync].
+/// struct.
 ///
 /// # Safety
 ///
@@ -40,13 +39,18 @@ macro_rules! err {
 /// # Example
 ///
 /// ```
-/// use uefi::{Identify, guid};
+/// use uefi::{Guid, Identify, guid};
 /// use uefi::proto::unsafe_protocol;
 ///
 /// #[unsafe_protocol("12345678-9abc-def0-1234-56789abcdef0")]
-/// struct ExampleProtocol {}
+/// struct ExampleProtocol1 {}
 ///
-/// assert_eq!(ExampleProtocol::GUID, guid!("12345678-9abc-def0-1234-56789abcdef0"));
+/// const PROTO_GUID: Guid = guid!("12345678-9abc-def0-1234-56789abcdef0");
+/// #[unsafe_protocol(PROTO_GUID)]
+/// struct ExampleProtocol2 {}
+///
+/// assert_eq!(ExampleProtocol1::GUID, PROTO_GUID);
+/// assert_eq!(ExampleProtocol2::GUID, PROTO_GUID);
 /// ```
 ///
 /// [`Identify`]: https://docs.rs/uefi/latest/uefi/trait.Identify.html
@@ -54,133 +58,45 @@ macro_rules! err {
 /// [send-and-sync]: https://doc.rust-lang.org/nomicon/send-and-sync.html
 #[proc_macro_attribute]
 pub fn unsafe_protocol(args: TokenStream, input: TokenStream) -> TokenStream {
-    // Parse `args` as a GUID string.
-    let (time_low, time_mid, time_high_and_version, clock_seq_and_variant, node) =
-        match parse_guid(parse_macro_input!(args as LitStr)) {
-            Ok(data) => data,
-            Err(tokens) => return tokens.into(),
-        };
+    let expr = parse_macro_input!(args as Expr);
+
+    let guid_val = match expr {
+        Expr::Lit(ExprLit {
+            lit: Lit::Str(lit), ..
+        }) => {
+            quote!(::uefi::guid!(#lit))
+        }
+        Expr::Path(ExprPath { path, .. }) => quote!(#path),
+        _ => {
+            return err!(
+                expr,
+                "macro input must be either a string literal or path to a constant"
+            )
+            .into()
+        }
+    };
 
     let item_struct = parse_macro_input!(input as ItemStruct);
 
     let ident = &item_struct.ident;
-    let struct_attrs = &item_struct.attrs;
-    let struct_vis = &item_struct.vis;
-    let struct_fields = if let Fields::Named(struct_fields) = &item_struct.fields {
-        &struct_fields.named
-    } else {
-        return err!(item_struct, "Protocol struct must used named fields").into();
-    };
-    let struct_generics = &item_struct.generics;
     let (impl_generics, ty_generics, where_clause) = item_struct.generics.split_for_impl();
 
     quote! {
-        #(#struct_attrs)*
-        #struct_vis struct #ident #struct_generics {
-            // Add a hidden field with `PhantomData` of a raw
-            // pointer. This has the implicit side effect of making the
-            // struct !Send and !Sync.
-            _no_send_or_sync: ::core::marker::PhantomData<*const u8>,
-            #struct_fields
-        }
+        // Disable this lint for now. It doesn't account for the fact that
+        // currently it doesn't work to `derive(Debug)` on structs that have
+        // `extern "efiapi" fn` fields, which most protocol structs have. The
+        // derive _does_ work in current nightly (1.70.0) though, so hopefully
+        // in a couple Rust releases we can drop this.
+        #[allow(missing_debug_implementations)]
+        #item_struct
 
         unsafe impl #impl_generics ::uefi::Identify for #ident #ty_generics #where_clause {
-            const GUID: ::uefi::Guid = ::uefi::Guid::from_values(
-                #time_low,
-                #time_mid,
-                #time_high_and_version,
-                #clock_seq_and_variant,
-                #node,
-            );
+            const GUID: ::uefi::Guid = #guid_val;
         }
 
         impl #impl_generics ::uefi::proto::Protocol for #ident #ty_generics #where_clause {}
     }
     .into()
-}
-
-/// Create a `Guid` at compile time.
-///
-/// # Example
-///
-/// ```
-/// use uefi::{guid, Guid};
-/// const EXAMPLE_GUID: Guid = guid!("12345678-9abc-def0-1234-56789abcdef0");
-/// ```
-#[proc_macro]
-pub fn guid(args: TokenStream) -> TokenStream {
-    let (time_low, time_mid, time_high_and_version, clock_seq_and_variant, node) =
-        match parse_guid(parse_macro_input!(args as LitStr)) {
-            Ok(data) => data,
-            Err(tokens) => return tokens.into(),
-        };
-
-    quote!({
-        const g: ::uefi::Guid = ::uefi::Guid::from_values(
-            #time_low,
-            #time_mid,
-            #time_high_and_version,
-            #clock_seq_and_variant,
-            #node,
-        );
-        g
-    })
-    .into()
-}
-
-fn parse_guid(guid_lit: LitStr) -> Result<(u32, u16, u16, u16, u64), TokenStream2> {
-    let guid_str = guid_lit.value();
-
-    // We expect a canonical GUID string, such as "12345678-9abc-def0-fedc-ba9876543210"
-    if guid_str.len() != 36 {
-        return Err(err!(
-            guid_lit,
-            "\"{}\" is not a canonical GUID string (expected 36 bytes, found {})",
-            guid_str,
-            guid_str.len()
-        ));
-    }
-    let mut offset = 1; // 1 is for the starting quote
-    let mut guid_hex_iter = guid_str.split('-');
-    let mut next_guid_int = |len: usize| -> Result<u64, TokenStream2> {
-        let guid_hex_component = guid_hex_iter.next().unwrap();
-
-        // convert syn::LitStr to proc_macro2::Literal..
-        let lit = match guid_lit.to_token_stream().into_iter().next().unwrap() {
-            TokenTree::Literal(lit) => lit,
-            _ => unreachable!(),
-        };
-        // ..so that we can call subspan and nightly users (us) will get the fancy span
-        let span = lit
-            .subspan(offset..offset + guid_hex_component.len())
-            .unwrap_or_else(|| lit.span());
-
-        if guid_hex_component.len() != len * 2 {
-            return Err(err!(
-                span,
-                "GUID component \"{}\" is not a {}-bit hexadecimal string",
-                guid_hex_component,
-                len * 8
-            ));
-        }
-        offset += guid_hex_component.len() + 1; // + 1 for the dash
-        u64::from_str_radix(guid_hex_component, 16).map_err(|_| {
-            err!(
-                span,
-                "GUID component \"{}\" is not a hexadecimal number",
-                guid_hex_component
-            )
-        })
-    };
-
-    // The GUID string is composed of a 32-bit integer, three 16-bit ones, and a 48-bit one
-    Ok((
-        next_guid_int(4)? as u32,
-        next_guid_int(2)? as u16,
-        next_guid_int(2)? as u16,
-        next_guid_int(2)? as u16,
-        next_guid_int(6)?,
-    ))
 }
 
 /// Get the name of a function's argument at `arg_index`.
@@ -278,8 +194,12 @@ pub fn entry(args: TokenStream, input: TokenStream) -> TokenStream {
         return errors.into();
     }
 
+    let signature_span = f.sig.span();
+
+    f.sig.abi = Some(syn::parse2(quote_spanned! (signature_span=> extern "efiapi")).unwrap());
+
     // allow the entry function to be unsafe (by moving the keyword around so that it actually works)
-    let unsafety = f.sig.unsafety.take();
+    let unsafety = &f.sig.unsafety;
     // strip any visibility modifiers
     f.vis = Visibility::Inherited;
     // Set the global image handle. If `image_handle_ident` is `None`
@@ -307,7 +227,6 @@ pub fn entry(args: TokenStream, input: TokenStream) -> TokenStream {
         }
     });
     let fn_output = &f.sig.output;
-    let signature_span = f.sig.span();
 
     let fn_type_check = quote_spanned! {signature_span=>
         // Cast from the function type to a function pointer with the same
@@ -329,7 +248,7 @@ pub fn entry(args: TokenStream, input: TokenStream) -> TokenStream {
         #fn_type_check
 
         #[export_name = "efi_main"]
-        #unsafety extern "efiapi" #f
+        #f
 
     };
     result.into()
@@ -342,12 +261,26 @@ pub fn entry(args: TokenStream, input: TokenStream) -> TokenStream {
 /// # Example
 /// ```
 /// # use uefi_macros::cstr8;
-/// assert_eq!(cstr8!("test").to_bytes_with_nul(), [116, 101, 115, 116, 0]);
+/// // Empty string
+/// assert_eq!(cstr8!().to_u16_slice_with_nul(), [0]);
+/// assert_eq!(cstr8!("").to_u16_slice_with_nul(), [0]);
+/// // Non-empty string
+/// assert_eq!(cstr8!("test").as_bytes(), [116, 101, 115, 116, 0]);
 /// ```
 #[proc_macro]
 pub fn cstr8(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    // Accept empty input.
+    if input.is_empty() {
+        return quote!(unsafe { ::uefi::CStr16::from_u16_with_nul_unchecked(&[0]) }).into();
+    }
     let input: LitStr = parse_macro_input!(input);
     let input = input.value();
+    // Accept "" input.
+    if input.is_empty() {
+        return quote!(unsafe { ::uefi::CStr16::from_u16_with_nul_unchecked(&[0]) }).into();
+    }
+
+    // Accept any non-empty string input.
     match input
         .chars()
         .map(u8::try_from)
@@ -367,14 +300,28 @@ pub fn cstr8(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 /// This will throw a compile error if an invalid character is in the passed string.
 ///
 /// # Example
-/// ```
+/// ```rust
 /// # use uefi_macros::cstr16;
+/// // Empty string
+/// assert_eq!(cstr16!().to_u16_slice_with_nul(), [0]);
+/// assert_eq!(cstr16!("").to_u16_slice_with_nul(), [0]);
+/// // Non-empty string
 /// assert_eq!(cstr16!("test €").to_u16_slice_with_nul(), [116, 101, 115, 116, 32, 8364, 0]);
 /// ```
 #[proc_macro]
 pub fn cstr16(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    // Accept empty input.
+    if input.is_empty() {
+        return quote!(unsafe { ::uefi::CStr16::from_u16_with_nul_unchecked(&[0]) }).into();
+    }
     let input: LitStr = parse_macro_input!(input);
     let input = input.value();
+    // Accept "" input.
+    if input.is_empty() {
+        return quote!(unsafe { ::uefi::CStr16::from_u16_with_nul_unchecked(&[0]) }).into();
+    }
+
+    // Accept any non-empty string input.
     match input
         .chars()
         .map(|c| u16::try_from(c as u32))
@@ -383,8 +330,11 @@ pub fn cstr16(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         Ok(c) => {
             quote!(unsafe { ::uefi::CStr16::from_u16_with_nul_unchecked(&[ #(#c),* , 0 ]) }).into()
         }
-        Err(_) => syn::Error::new_spanned(input, "invalid character in string")
-            .into_compile_error()
-            .into(),
+        Err(_) => syn::Error::new_spanned(
+            input,
+            "There are UTF-8 characters that can't be transformed to UCS-2 character",
+        )
+        .into_compile_error()
+        .into(),
     }
 }

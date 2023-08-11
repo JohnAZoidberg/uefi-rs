@@ -35,6 +35,10 @@ This project contains multiple sub-crates:
 
 - `uefi-macros`: procedural macros that are used to derive some traits in `uefi`.
 
+- `uefi-raw`: raw types that closely match the definitions in the UEFI
+  Specification. Safe wrappers for these types are provided by the `uefi`
+  crate. The raw types are suitable for implementing UEFI firmware.
+
 - `uefi-services`: provides a panic handler, and initializes the `alloc` / `logger` features.
 
 - `uefi-test-runner`: a UEFI application that runs unit / integration tests.
@@ -49,6 +53,7 @@ important UEFI concepts.
 Reference documentation can be found on docs.rs:
 - [docs.rs/uefi](https://docs.rs/uefi)
 - [docs.rs/uefi-macros](https://docs.rs/uefi-macros)
+- [docs.rs/uefi-raw](https://docs.rs/uefi-raw)
 - [docs.rs/uefi-services](https://docs.rs/uefi-services)
 
 For additional information, refer to the [UEFI specification][spec].
